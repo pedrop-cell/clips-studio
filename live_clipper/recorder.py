@@ -100,7 +100,9 @@ class Recorder:
             "-f", "segment", "-segment_time", str(SEGMENT_S), "-reset_timestamps", "1",
             "-strftime", "1", str(self.folder / f"{SEGMENT_FMT}.ts"),
         ]
-        env = {**os.environ, "TZ": "UTC"}
+        # "UTC0" is read the same by glibc and the Windows C runtime, so segment
+        # names are UTC wall-clock on a Windows PC too.
+        env = {**os.environ, "TZ": "UTC0"}
         self._dl = subprocess.Popen(dl_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         self._ff = subprocess.Popen(ff_cmd, stdin=self._dl.stdout, env=env,
                                     stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)

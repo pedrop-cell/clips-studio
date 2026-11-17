@@ -36,7 +36,7 @@ services:
       - ./live_clipper.yaml:/app/live_clipper.yaml:ro
     environment:
       PYTHONUNBUFFERED: '1'
-      TZ: UTC
+      TZ: UTC0
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
     command: ['python', '-m', 'live_clipper', '--config', '/app/live_clipper.yaml']
