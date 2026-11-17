@@ -1,0 +1,64 @@
+# Live clipper config. Copy to live_clipper.yaml and edit.
+# Run:  python -m live_clipper --config live_clipper.yaml
+# Docs: docs/LIVE-CLIPPER.md
+
+# Channels to watch: "platform:login". Platforms: twitch, kick.
+# Use the login from the channel's URL (twitch.tv/<login>, kick.com/<login>).
+# Check each login before launch night; a wrong one just never goes live.
+channels:
+  - twitch:paulinholokobr
+  - twitch:coringa
+  - twitch:alanzoka
+  - twitch:casimiro
+  - twitch:gaules
+  - twitch:xqc
+  - twitch:kaicenat
+  - kick:n3on
+  # - {platform: twitch, name: someone, label: "Nome que aparece nos créditos"}
+
+work_dir: /data/live            # buffers, cuts and the post ledger
+engine_url: http://127.0.0.1:8765
+buffer_s: 600                   # seconds of each live kept on disk
+pre_s: 25                       # seconds kept before the chat spike's onset
+post_s: 15                      # and after it
+live_check_s: 60                # how often an offline channel is checked
+max_parallel_jobs: 2            # engine jobs at once (raise on a GPU host)
+utc_offset_h: -3                # whose "day" the daily caps count (Brasília)
+
+detection:
+  window_s: 10        # the recent window compared against the baseline
+  baseline_s: 300     # the channel's usual chat rate is measured over this
+  ratio: 3.0          # spike = recent rate at least this many times the baseline
+  min_rate: 1.0       # and at least this many weighted messages a second
+  warmup_s: 60        # no spikes until this much chat has been seen
+  cooldown_s: 90      # at most one spike per channel in this long
+  hype_weight: 1.0    # extra weight for KEKW, kkkk, CLIP, ???...
+
+# Passed to the engine for each cut (same fields as POST /jobs).
+engine_options:
+  gaming: true
+  captions: true
+  max_clips: 1
+  min_score: 0
+  focus: "the strongest reaction or hype moment; start right before it happens"
+
+publish:
+  enabled: true                 # false = make clips, never send them (same as --dry-run)
+  # telegram (free): each clip arrives in a Telegram chat with its caption,
+  #   and you post it to TikTok / Shorts by hand from your phone.
+  # upload_post: posts straight to the platforms (TikTok needs a paid plan).
+  mode: telegram
+  telegram:
+    chat_id: ""                 # or set TELEGRAM_CHAT_ID; see docs/LIVE-CLIPPER.md
+    token_env: TELEGRAM_BOT_TOKEN   # the bot token is read from this env var only
+  # The rest is for mode: upload_post.
+  # Upload-Post platform names. Connect these accounts in Upload-Post first.
+  platforms: [tiktok, youtube]
+  limits:
+    tiktok:  {per_day: 12, min_gap_s: 1200}
+    youtube: {per_day: 20, min_gap_s: 900}
+  privacy:
+    tiktok: PUBLIC_TO_EVERYONE
+    youtube: public
+  hashtags: [GTA6, GTAVI, GTA6Brasil, ViceCity, cortes]
+  credit: "Créditos: {channel} ({url})"

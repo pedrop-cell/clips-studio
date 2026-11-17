@@ -287,3 +287,6 @@ _test_*.py
 /media.txt
 /seg.ts
 *.ts.tmp
+
+# Live clipper: your own channel list
+live_clipper.yaml
