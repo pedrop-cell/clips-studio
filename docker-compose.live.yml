@@ -1,0 +1,55 @@
+# Engine + live clipper on an always-on server.
+#
+#   cp live_clipper/config.example.yaml live_clipper.yaml   # edit channels
+#   docker compose -f docker-compose.live.yml up -d --build
+#   docker compose -f docker-compose.live.yml logs -f live
+#
+# The engine only answers requests addressed to localhost, so the clipper
+# shares the engine's network namespace (network_mode below) and reaches it
+# at 127.0.0.1. Both mount the same /data, so a cut written by the clipper is
+# a path the engine can open.
+#
+# Upload-Post and the AI model are set up once through the engine's API or
+# UI; see docs/LIVE-CLIPPER.md.
+
+services:
+  engine:
+    build: .
+    ports:
+      - '127.0.0.1:8765:8765'
+    volumes:
+      - clips-data:/data
+    environment:
+      CLIPS_STUDIO_OLLAMA_HOST: http://ollama:11434
+      CLIPS_STUDIO_DATA_DIR: /data
+      PYTHONIOENCODING: utf-8
+      PYTHONUNBUFFERED: '1'
+    restart: unless-stopped
+    depends_on:
+      - ollama
+
+  live:
+    build: .
+    network_mode: 'service:engine'
+    volumes:
+      - clips-data:/data
+      - ./live_clipper.yaml:/app/live_clipper.yaml:ro
+    environment:
+      PYTHONUNBUFFERED: '1'
+      TZ: UTC0
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+    command: ['python', '-m', 'live_clipper', '--config', '/app/live_clipper.yaml']
+    restart: unless-stopped
+    depends_on:
+      - engine
+
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama-models:/root/.ollama
+    restart: unless-stopped
+
+volumes:
+  clips-data:
+  ollama-models:
