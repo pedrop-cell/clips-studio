@@ -589,3 +589,61 @@ def test_submit_waits_for_room_in_a_full_queue_and_resume_calls_the_api():
     eng._call = bad
     with pytest.raises(EngineError):
         eng.submit_local("c.mp4", title="t", channel="c", platform="twitch", source_url="u", options={})
+
+
+def test_youtube_chat_prefers_every_message_over_top_chat():
+    menu = (
+        '"sortFilterSubMenuRenderer":{"subMenuItems":['
+        '{"title":"Top chat","selected":true,"continuation":{"reloadContinuationData":'
+        '{"continuation":"TOP","clickTrackingParams":"a"}},"accessibility":{"accessibilityData":{"label":"Top"}},'
+        '"subtitle":"Some messages"},'
+        '{"title":"Live chat","selected":false,"continuation":{"reloadContinuationData":'
+        '{"continuation":"ALL","clickTrackingParams":"b"}},"accessibility":{"accessibilityData":{"label":"Live"}},'
+        '"subtitle":"All messages are visible"}],"accessibility":{"accessibilityData":{"label":"menu"}}}'
+    )
+    page = YT_PAGE.replace("</script>", menu + "</script>")
+    assert chat.parse_youtube_chat_page(page)[2] == "ALL"
+
+
+def test_twitch_records_with_streamlink_without_ads(tmp_path, monkeypatch):
+    from live_clipper import recorder as rmod
+
+    cmds = []
+
+    class FakePopen:
+        def __init__(self, cmd, **kw):
+            cmds.append(cmd)
+            self.stdout = None
+
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(rmod.subprocess, "Popen", FakePopen)
+    monkeypatch.setattr(rmod, "streamlink_cmd", lambda: ["streamlink"])
+    rmod.Recorder("twitch", "paulinholokobr", tmp_path).start()
+    assert cmds[0][0] == "streamlink" and "--twitch-disable-ads" in cmds[0]
+    assert "https://www.twitch.tv/paulinholokobr" in cmds[0]
+    monkeypatch.setattr(rmod, "streamlink_cmd", lambda: None)
+    cmds.clear()
+    rmod.Recorder("twitch", "x", tmp_path).start()
+    assert "-f" in cmds[0]
+
+
+def test_jobs_waited_on_survive_a_restart(tmp_path):
+    import json as _json
+
+    from live_clipper.config import Channel
+    from live_clipper.runner import Clipper
+
+    engine = FakeEngine(tmp_path / "clip.mp4")
+    clipper = Clipper(make_cfg(tmp_path), engine=engine)
+    clipper._remember(Channel("twitch", "kaicenat"), 4, "local_abc", "20261118-140208", 3.1)
+    assert _json.loads((tmp_path / "pending_jobs.json").read_text())[0]["job_id"] == 4
+
+    again = Clipper(make_cfg(tmp_path), engine=engine)  # the next run
+    again.telegram = FakeTelegram()
+    assert again.resume_pending() == 1
+    again.pool.shutdown(wait=True)
+    (video, short, full), = again.telegram.sent
+    assert "kaicenat" in short
+    assert _json.loads((tmp_path / "pending_jobs.json").read_text()) == []

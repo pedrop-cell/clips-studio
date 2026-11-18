@@ -80,6 +80,23 @@ def ffmpeg_bin() -> str:
     return shutil.which("ffmpeg") or "ffmpeg"
 
 
+def streamlink_cmd() -> list[str] | None:
+    """streamlink, if installed. It drops Twitch's ad segments, which yt-dlp
+    passes through: an ad break (a pre-roll on every connect, for an
+    anonymous viewer) rewinds the timestamps and the segmenter then stalls."""
+    exe = shutil.which("streamlink")
+    if exe:
+        return [exe]
+    try:
+        import importlib.util
+
+        if importlib.util.find_spec("streamlink"):
+            return [sys.executable, "-m", "streamlink"]
+    except (ImportError, ValueError):
+        pass
+    return None
+
+
 def ytdlp_cmd() -> list[str]:
     exe = shutil.which("yt-dlp")
     return [exe] if exe else [sys.executable, "-m", "yt_dlp"]
@@ -194,10 +211,15 @@ class Recorder:
 
     def start(self) -> None:
         self.folder.mkdir(parents=True, exist_ok=True)
-        dl_cmd = [*ytdlp_cmd(), "--quiet", "--no-part", "-f", self.quality, "-o", "-"]
-        if self.platform == "kick":
-            dl_cmd += ["--impersonate", "chrome"]
-        dl_cmd.append(live_url(self.platform, self.channel))
+        sl = streamlink_cmd() if self.platform == "twitch" else None
+        if sl:
+            dl_cmd = [*sl, "--loglevel", "warning", "--twitch-disable-ads",
+                      "--stdout", live_url(self.platform, self.channel), "1080p60,1080p,best"]
+        else:
+            dl_cmd = [*ytdlp_cmd(), "--quiet", "--no-part", "-f", self.quality, "-o", "-"]
+            if self.platform == "kick":
+                dl_cmd += ["--impersonate", "chrome"]
+            dl_cmd.append(live_url(self.platform, self.channel))
         ff_cmd = [
             ffmpeg_bin(), "-hide_banner", "-loglevel", "error", "-i", "pipe:0",
             "-map", "0:v:0?", "-map", "0:a:0?", "-c", "copy",

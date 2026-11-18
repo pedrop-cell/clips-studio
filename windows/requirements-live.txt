@@ -6,3 +6,5 @@ websockets>=14,<17
 # recording a YouTube live needs; it is pinned to match each yt-dlp release.
 yt-dlp[default]>=2026.8.19
 curl_cffi>=0.15.0,<0.16
+# Records Twitch without its ad breaks (yt-dlp's stalled on them).
+streamlink>=7.0

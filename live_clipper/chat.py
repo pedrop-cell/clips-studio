@@ -223,7 +223,14 @@ def parse_youtube_chat_page(html: str) -> tuple[str, str, str]:
                      r'"continuation"\s*:\s*"([^"]+)"', html)
     if not (key and cont):
         raise OSError("youtube chat page without a key or continuation (chat off or not live?)")
-    return key.group(1), (ver.group(1) if ver else "2.20260101.00.00"), cont.group(1)
+    # The page opens on "Top chat", which YouTube filters down to a fraction
+    # of the messages. Its menu offers "Top chat" then "Live chat" (every
+    # message), each a reloadContinuationData; take the second when there.
+    menu = re.search(r'"subMenuItems"\s*:\s*\[(.*?)\]\s*,\s*"accessibility"', html, re.S)
+    reloads = re.findall(r'"reloadContinuationData"\s*:\s*\{(?:[^{}]|\{[^{}]*\})*?'
+                         r'"continuation"\s*:\s*"([^"]+)"', menu.group(1) if menu else "")
+    first = reloads[1] if len(reloads) >= 2 else cont.group(1)
+    return key.group(1), (ver.group(1) if ver else "2.20260101.00.00"), first
 
 
 def _runs_text(message: dict | None) -> str:
