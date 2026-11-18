@@ -13,6 +13,7 @@ channels:
   - twitch:gaules
   - twitch:xqc
   - twitch:kaicenat
+  - twitch:mount
   - kick:n3on
   # - {platform: twitch, name: someone, label: "Nome que aparece nos créditos"}
 
