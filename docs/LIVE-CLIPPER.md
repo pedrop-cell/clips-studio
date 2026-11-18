@@ -3,7 +3,7 @@
 **Clip a stream while it is still live, from the moments its chat explodes.**
 
 The engine itself only works on finished videos (a VOD, a file). The live
-clipper is a separate process that sits next to it. For every Twitch or Kick
+clipper is a separate process that sits next to it. For every Twitch, Kick or YouTube
 channel in its list that is live, it:
 
 1. reads the channel's public chat anonymously (no account, no token),
@@ -122,7 +122,10 @@ If the local model is too slow there, point the engine at OpenRouter
 
 ## Limits
 
-- **Twitch and Kick only.** YouTube live chat needs an API key and quota.
+- **YouTube is unofficial too.** Its chat is read the way YouTube's popout
+  chat page reads it (no API key, no quota), and recording a YouTube live
+  needs a JavaScript runtime for yt-dlp (Deno, which the Windows setup
+  installs). Add a channel as `youtube:@handle` or paste its link.
 - **Kick is unofficial.** Its chat socket and channel endpoint are the ones
   kick.com's own player uses; if Kick changes them, Kick channels log errors
   and retry while Twitch keeps working.

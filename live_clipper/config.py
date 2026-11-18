@@ -1,6 +1,7 @@
 """The live clipper's YAML config. See live_clipper/config.example.yaml."""
 
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -9,7 +10,7 @@ import yaml
 from live_clipper.poster import Limits
 from live_clipper.trends import TrendsConfig
 
-PLATFORMS = ("twitch", "kick")
+PLATFORMS = ("twitch", "kick", "youtube")
 MODES = ("telegram", "upload_post")
 
 
@@ -21,7 +22,69 @@ class Channel:
 
     @property
     def key(self) -> str:
-        return f"{self.platform}_{self.name}"
+        # Used as a folder name, so no ":" or "/" (Windows) from YouTube names.
+        return re.sub(r"[^\w.@-]", "_", f"{self.platform}_{self.name}")
+
+
+_YT_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
+_YT_CHANNEL_ID = re.compile(r"^UC[A-Za-z0-9_-]{22}$")
+
+
+def youtube_name(value: str) -> str:
+    """The canonical YouTube name for a handle, channel id, or pasted link.
+
+    "@handle" (lowercased) for a channel handle, the "UC..." id as-is (ids are
+    case-sensitive), or "watch:<video id>" for a link to one live video.
+    """
+    v = value.strip()
+    m = re.match(r"^(?:https?://)?(?:www\.|m\.)?(youtube\.com|youtu\.be)/(.*)$", v, re.I)
+    if m:
+        host, path = m.group(1).lower(), m.group(2)
+        path, _, query = path.partition("?")
+        parts = [p for p in path.split("/") if p]
+        if host == "youtu.be" and parts and _YT_ID.match(parts[0]):
+            return f"watch:{parts[0]}"
+        if parts and parts[0] == "watch":
+            vid = re.search(r"(?:^|&)v=([A-Za-z0-9_-]{11})", query)
+            if vid:
+                return f"watch:{vid.group(1)}"
+        if len(parts) >= 2 and parts[0] == "live" and _YT_ID.match(parts[1]):
+            return f"watch:{parts[1]}"
+        if len(parts) >= 2 and parts[0] == "channel":
+            v = parts[1]
+        elif parts and parts[0].startswith("@"):
+            v = parts[0]
+        elif len(parts) >= 2 and parts[0] in ("c", "user"):
+            v = "@" + parts[1]
+        else:
+            raise ValueError(f"não entendi este link do YouTube: {value}")
+    if v.startswith("watch:"):
+        return v
+    if _YT_CHANNEL_ID.match(v):
+        return v
+    v = v.lstrip("@").lower()
+    if not v or not re.match(r"^[\w.-]+$", v):
+        raise ValueError(f"canal do YouTube inválido: {value}")
+    return "@" + v
+
+
+def parse_channel(entry) -> "Channel":
+    """A config entry: "platform:name", a pasted channel link, or a dict."""
+    if isinstance(entry, str):
+        s = entry.strip()
+        if re.match(r"^(?:https?://)?(?:www\.|m\.)?(youtube\.com|youtu\.be)/", s, re.I):
+            entry = {"platform": "youtube", "name": s}
+        elif m := re.match(r"^(?:https?://)?(?:www\.)?(twitch\.tv|kick\.com)/([^/?#]+)", s, re.I):
+            entry = {"platform": m.group(1).split(".")[0].lower(), "name": m.group(2)}
+        else:
+            platform, _, name = s.partition(":")
+            entry = {"platform": platform, "name": name}
+    platform = str(entry["platform"]).lower().strip()
+    raw_name = str(entry["name"]).strip()
+    if platform not in PLATFORMS:
+        raise ValueError(f"channel {raw_name}: platform must be one of {PLATFORMS}")
+    name = youtube_name(raw_name) if platform == "youtube" else raw_name.lower()
+    return Channel(platform=platform, name=name, label=str(entry.get("label") or ""))
 
 
 @dataclass
@@ -76,14 +139,7 @@ def load(path: str | Path) -> Config:
     raw = yaml.safe_load(Path(path).read_text("utf-8")) or {}
     channels = []
     for c in raw.get("channels") or []:
-        if isinstance(c, str):
-            platform, _, name = c.partition(":")
-            c = {"platform": platform, "name": name}
-        ch = Channel(platform=str(c["platform"]).lower(), name=str(c["name"]).lower().strip(),
-                     label=str(c.get("label") or ""))
-        if ch.platform not in PLATFORMS:
-            raise ValueError(f"channel {ch.name}: platform must be one of {PLATFORMS}")
-        channels.append(ch)
+        channels.append(parse_channel(c))
     if not channels:
         raise ValueError("no channels in the config")
     pub = raw.get("publish") or {}

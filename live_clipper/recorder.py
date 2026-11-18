@@ -30,6 +30,13 @@ def live_url(platform: str, channel: str) -> str:
         return f"https://www.twitch.tv/{channel}"
     if platform == "kick":
         return f"https://kick.com/{channel}"
+    if platform == "youtube":
+        # channel is what config.youtube_name returns.
+        if channel.startswith("watch:"):
+            return f"https://www.youtube.com/watch?v={channel[6:]}"
+        if channel.startswith("@"):
+            return f"https://www.youtube.com/{channel}/live"
+        return f"https://www.youtube.com/channel/{channel}/live"
     raise ValueError(f"unsupported platform {platform!r}")
 
 
@@ -168,4 +175,29 @@ def is_live(platform: str, channel: str) -> bool:
             info = ydl.extract_info(live_url(platform, channel), download=False)
     except Exception:  # offline channels raise; so do network hiccups
         return False
-    return bool(info and info.get("is_live", True))
+    return live_from_info(platform, info)
+
+
+def live_from_info(platform: str, info: dict | None) -> bool:
+    if not info:
+        return False
+    if platform == "youtube":
+        # An offline channel's /live can resolve to its page, a past stream or
+        # an upcoming one; only a stream that is on air now counts.
+        return info.get("live_status") == "is_live" or info.get("is_live") is True
+    return bool(info.get("is_live", True))
+
+
+def youtube_live_video_id(channel: str) -> str | None:
+    """The id of the video a YouTube channel is streaming now, or None."""
+    if channel.startswith("watch:"):
+        return channel[6:]
+    import yt_dlp
+
+    opts = {"quiet": True, "no_warnings": True, "skip_download": True}
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(live_url("youtube", channel), download=False)
+    except Exception:
+        return None
+    return info.get("id") if live_from_info("youtube", info) else None

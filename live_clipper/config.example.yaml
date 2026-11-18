@@ -2,8 +2,11 @@
 # Run:  python -m live_clipper --config live_clipper.yaml
 # Docs: docs/LIVE-CLIPPER.md
 
-# Channels to watch: "platform:login". Platforms: twitch, kick.
+# Channels to watch: "platform:login". Platforms: twitch, kick, youtube.
 # Use the login from the channel's URL (twitch.tv/<login>, kick.com/<login>).
+# YouTube: youtube:@handle, or just paste the channel's link
+# (https://www.youtube.com/@handle). A link to one live video works too,
+# but only for that stream.
 # Check each login before launch night; a wrong one just never goes live.
 channels:
   - twitch:paulinholokobr
@@ -13,8 +16,8 @@ channels:
   - twitch:gaules
   - twitch:xqc
   - twitch:kaicenat
-  - twitch:mount
   - kick:n3on
+  # - https://www.youtube.com/@canal
   # - {platform: twitch, name: someone, label: "Nome que aparece nos créditos"}
 
 work_dir: /data/live            # buffers, cuts and the post ledger

@@ -40,6 +40,17 @@ if (-not (Tem "ffmpeg")) {
     if (-not (Tem "ffmpeg")) { Falha "O ffmpeg foi instalado mas o Windows ainda nao achou. Feche e abra o Iniciar-Clipador.bat de novo." }
 }
 
+Passo "Conferindo o Deno (para lives do YouTube)"
+# O yt-dlp precisa de um runtime JavaScript para gravar lives do YouTube.
+if (-not (Tem "deno")) {
+    if (Tem "winget") {
+        Write-Host "Instalando o Deno (uma vez so)..."
+        winget install -e --id DenoLand.Deno --accept-package-agreements --accept-source-agreements --silent
+        Atualizar-Path
+    }
+    if (-not (Tem "deno")) { Write-Host "Aviso: Deno nao instalado; lives do YouTube podem nao gravar." -ForegroundColor Yellow }
+}
+
 Passo "Preparando o ambiente do Clipador"
 if (-not (Test-Path $Py)) {
     & $PyBase[0] $PyBase[1..9] -m venv $Venv

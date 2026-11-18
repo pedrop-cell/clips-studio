@@ -5,10 +5,12 @@ Nothing here opens a socket or starts a process.
 
 import json
 import subprocess
+import threading
 from pathlib import Path
 
 import pytest
 
+from live_clipper import chat
 from live_clipper import config as lc_config
 from live_clipper.chat import parse_privmsg, parse_pusher
 from live_clipper.detector import SpikeDetector, message_weight
@@ -196,7 +198,7 @@ def test_example_config_loads():
 
 def test_config_rejects_unknown_platform(tmp_path):
     p = tmp_path / "c.yaml"
-    p.write_text("channels: ['youtube:someone']\n")
+    p.write_text("channels: ['facebook:someone']\n")
     with pytest.raises(ValueError):
         lc_config.load(p)
 
@@ -346,3 +348,103 @@ def test_find_chat_id_reads_latest_message(monkeypatch):
     monkeypatch.setattr(notify.urllib.request, "urlopen",
                         lambda url, timeout: io.BytesIO(json.dumps(body).encode()))
     assert notify.find_chat_id("t") == "99"
+
+
+# ---- YouTube ---------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("entry,name", [
+    ("youtube:Mount", "@mount"),
+    ("youtube:@Mount", "@mount"),
+    ("https://www.youtube.com/@Mount", "@mount"),
+    ("https://www.youtube.com/@Mount/live", "@mount"),
+    ("youtube.com/@mount/streams", "@mount"),
+    ("https://www.youtube.com/channel/UCabcdefghijklmnopqrstUV", "UCabcdefghijklmnopqrstUV"),
+    ("https://www.youtube.com/watch?v=abcdefghijk&t=10", "watch:abcdefghijk"),
+    ("https://youtu.be/abcdefghijk", "watch:abcdefghijk"),
+    ("https://www.youtube.com/live/abcdefghijk?si=x", "watch:abcdefghijk"),
+])
+def test_youtube_channel_entries(entry, name):
+    ch = lc_config.parse_channel(entry)
+    assert (ch.platform, ch.name) == ("youtube", name)
+    assert ":" not in ch.key and "/" not in ch.key
+
+
+def test_pasted_twitch_and_kick_links():
+    assert lc_config.parse_channel("https://www.twitch.tv/Coringa").name == "coringa"
+    assert lc_config.parse_channel("https://kick.com/n3on").platform == "kick"
+
+
+def test_youtube_live_urls():
+    from live_clipper.recorder import live_url
+
+    assert live_url("youtube", "@mount") == "https://www.youtube.com/@mount/live"
+    assert live_url("youtube", "UCabcdefghijklmnopqrstUV").endswith("/channel/UCabcdefghijklmnopqrstUV/live")
+    assert live_url("youtube", "watch:abcdefghijk") == "https://www.youtube.com/watch?v=abcdefghijk"
+
+
+def test_youtube_only_on_air_counts_as_live():
+    from live_clipper.recorder import live_from_info
+
+    assert live_from_info("youtube", {"live_status": "is_live"})
+    assert not live_from_info("youtube", {"live_status": "is_upcoming"})
+    assert not live_from_info("youtube", {"live_status": "was_live"})
+    assert not live_from_info("youtube", {"_type": "playlist"})
+    assert live_from_info("twitch", {"id": "x"})
+
+
+YT_PAGE = (
+    '<script>ytcfg.set({"INNERTUBE_API_KEY":"KEY123","INNERTUBE_CLIENT_VERSION":"2.20261101.01.00"});'
+    'var ytInitialData = {"contents":{"liveChatRenderer":{"continuations":[{"invalidationContinuationData":'
+    '{"invalidationId":{"objectSource":1},"timeoutMs":10000,"continuation":"CONT0"}}]}}};</script>'
+)
+
+
+def test_youtube_chat_page_gives_key_and_continuation():
+    assert chat.parse_youtube_chat_page(YT_PAGE) == ("KEY123", "2.20261101.01.00", "CONT0")
+    with pytest.raises(OSError):
+        chat.parse_youtube_chat_page("<html>no chat</html>")
+
+
+def _yt_answer(cont="CONT1"):
+    return {"continuationContents": {"liveChatContinuation": {
+        "continuations": [{"timedContinuationData": {"timeoutMs": 1000, "continuation": cont}}] if cont else [],
+        "actions": [
+            {"addChatItemAction": {"item": {"liveChatTextMessageRenderer": {
+                "timestampUsec": "1763470000000000",
+                "message": {"runs": [{"text": "KKKKKK "}, {"emoji": {"emojiId": "x", "shortcuts": [":joy:"]}}]},
+            }}}},
+            {"addChatItemAction": {"item": {"liveChatPaidMessageRenderer": {
+                "timestampUsec": "1763470001000000", "message": {"runs": [{"text": "CLIPA"}]},
+            }}}},
+            {"addChatItemAction": {"item": {"liveChatViewerEngagementMessageRenderer": {}}}},
+            {"markChatItemAsDeletedAction": {}},
+        ],
+    }}}
+
+
+def test_youtube_chat_answer_parses_messages_and_next_poll():
+    msgs, cont, wait = chat.parse_youtube_chat(_yt_answer())
+    assert msgs == [(1763470000.0, "KKKKKK :joy:"), (1763470001.0, "CLIPA")]
+    assert cont == "CONT1" and wait == 1.0
+    assert chat.parse_youtube_chat(_yt_answer(cont=None))[1] is None
+
+
+def test_youtube_chat_reader_polls_until_chat_ends():
+    calls = []
+
+    def http(url, body=None, timeout=20):
+        calls.append((url, body))
+        if body is None:
+            assert "v=abcdefghijk" in url
+            return YT_PAGE
+        assert "key=KEY123" in url and body["continuation"] in ("CONT0", "CONT1")
+        return json.dumps(_yt_answer(cont="CONT1" if body["continuation"] == "CONT0" else None))
+
+    reader = chat.reader_for("youtube", "@mount", http=http, video_id=lambda c: "abcdefghijk")
+    got = []
+    stop = threading.Event()
+    with pytest.raises(OSError, match="chat ended"):
+        reader._session(lambda ts, text: got.append(text), stop)
+    assert got == ["KKKKKK :joy:", "CLIPA"] * 2
+    assert len(calls) == 3
