@@ -110,6 +110,13 @@ class _FileLog:
         self.fh.write(f"{msg}\n")
 
 
+class _Silent:
+    def debug(self, msg: str) -> None:
+        pass
+
+    info = warning = error = debug
+
+
 def _has(f: dict, kind: str) -> bool:
     return f.get(kind) != "none"  # None means "not stated", which HLS often is
 
@@ -182,6 +189,7 @@ class Recorder:
         self._dl: subprocess.Popen | None = None
         self._ff: subprocess.Popen | None = None
         self._dl_log = None
+        self._ff_log = None
         self.started_at = 0.0
 
     def start(self) -> None:
@@ -209,7 +217,7 @@ class Recorder:
         self._dl = subprocess.Popen(dl_cmd, stdout=subprocess.PIPE, stderr=self._dl_log)
         self.started_at = time.time()
         self._ff = subprocess.Popen(ff_cmd, stdin=self._dl.stdout, env=env,
-                                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                                    stdout=subprocess.DEVNULL, stderr=self._open_ff_log())
         if self._dl.stdout:
             self._dl.stdout.close()  # ffmpeg owns the read end now
         log.info("recording %s/%s into %s", self.platform, self.channel, self.folder)
@@ -227,7 +235,7 @@ class Recorder:
         hdr = "".join(f"{k}: {v}\r\n" for k, v in headers.items())
         ff_cmd[i - 1:i + 1] = [*(["-headers", hdr] if hdr else []), "-i", url]
         self._ff = subprocess.Popen(ff_cmd, stdin=subprocess.DEVNULL, env=env,
-                                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                                    stdout=subprocess.DEVNULL, stderr=self._open_ff_log())
         log.info("recording %s/%s (%s) into %s", self.platform, self.channel, desc, self.folder)
 
     def alive(self) -> bool:
@@ -250,13 +258,26 @@ class Recorder:
     def log_path(self) -> Path:
         return self.folder / "yt-dlp.log"
 
+    @property
+    def ff_log_path(self) -> Path:
+        return self.folder / "ffmpeg.log"
+
+    def _open_ff_log(self):
+        # A file, never a pipe nobody reads: on Windows a pipe fills after a
+        # few KB of ffmpeg complaints (Twitch ad breaks make plenty), and
+        # ffmpeg then blocks for good, alive but writing no more segments.
+        self._ff_log = open(self.ff_log_path, "wb")  # closed in stop()
+        return self._ff_log
+
     def _close_log(self) -> None:
-        if self._dl_log is not None:
-            try:
-                self._dl_log.close()
-            except OSError:
-                pass
-            self._dl_log = None
+        for attr in ("_dl_log", "_ff_log"):
+            fh = getattr(self, attr, None)
+            if fh is not None:
+                try:
+                    fh.close()
+                except OSError:
+                    pass
+                setattr(self, attr, None)
 
     def last_error(self, max_chars: int = 1500) -> str:
         """The tail of what yt-dlp (and ffmpeg) printed before dying."""
@@ -265,11 +286,10 @@ class Recorder:
             parts.append(self.log_path.read_text("utf-8", "replace").strip())
         except OSError:
             pass
-        if self._ff and self._ff.poll() is not None and self._ff.stderr:
-            try:
-                parts.append(self._ff.stderr.read().decode("utf-8", "replace").strip())
-            except (OSError, ValueError):
-                pass
+        try:
+            parts.append(self.ff_log_path.read_text("utf-8", "replace").strip()[-max_chars // 2:])
+        except OSError:
+            pass
         text = " | ".join(p for p in parts if p)
         return text[-max_chars:]
 
@@ -278,6 +298,13 @@ class Recorder:
         for start, path in list_segments(self.folder)[:-1]:
             if start < horizon:
                 path.unlink(missing_ok=True)
+
+    def describe(self) -> str:
+        """One line on the buffer's state, for a cut that found nothing."""
+        segs = list_segments(self.folder)
+        last = time.strftime("%H:%M:%S", time.gmtime(segs[-1][0])) + " UTC" if segs else "-"
+        state = "gravando" if self.alive() else "parado"
+        return f"{state}, {len(segs)} pedaços no buffer, último {last}"
 
     def covered_until(self) -> float:
         """Wall-clock time up to which complete segments exist."""
@@ -307,7 +334,9 @@ def is_live(platform: str, channel: str) -> bool:
     """True if the channel is streaming now. One yt-dlp metadata request."""
     import yt_dlp
 
-    opts = {"quiet": True, "no_warnings": True, "skip_download": True}
+    # An offline channel is an ERROR to yt-dlp; to us it is the normal case,
+    # so nothing is printed (it filled Pedro's window every minute).
+    opts = {"quiet": True, "no_warnings": True, "skip_download": True, "logger": _Silent()}
     if platform == "kick":
         from live_clipper.chat import impersonation
 
@@ -336,7 +365,7 @@ def youtube_live_video_id(channel: str) -> str | None:
         return channel[6:]
     import yt_dlp
 
-    opts = {"quiet": True, "no_warnings": True, "skip_download": True}
+    opts = {"quiet": True, "no_warnings": True, "skip_download": True, "logger": _Silent()}
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(live_url("youtube", channel), download=False)

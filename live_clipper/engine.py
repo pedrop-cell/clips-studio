@@ -53,15 +53,31 @@ class Engine:
             raise EngineError(f"engine did not queue {path}: {res}")
         return int(res["job_id"]), str(res["video_id"])
 
-    def wait_job(self, job_id: int, timeout_s: float = 1800, every_s: float = 5) -> dict:
-        deadline = time.monotonic() + timeout_s
+    def wait_job(self, job_id: int, timeout_s: float = 1800, every_s: float = 5,
+                 on_wait: Callable[[dict, float], None] | None = None,
+                 report_every_s: float = 120) -> dict:
+        """Poll a job until done or failed. `on_wait(job, waited_s)` is called
+        every `report_every_s` meanwhile, so a slow job isn't silent."""
+        start = time.monotonic()
+        deadline = start + timeout_s
+        next_report = start + report_every_s
         while True:
             job = self._call("GET", f"/jobs/{job_id}")
             if job and job.get("status") in ("done", "failed"):
                 return job
-            if time.monotonic() > deadline:
+            now = time.monotonic()
+            if on_wait and job and now >= next_report:
+                on_wait(job, now - start)
+                next_report = now + report_every_s
+            if now > deadline:
                 raise EngineError(f"job {job_id} still {job and job.get('status')} after {timeout_s:.0f}s")
             self._sleep(every_s)
+
+    def queue_paused(self) -> bool:
+        try:
+            return bool((self._call("GET", "/queue", timeout=10) or {}).get("paused"))
+        except EngineError:
+            return False
 
     def clips(self, video_id: str) -> list[dict]:
         return self._call("GET", f"/videos/{video_id}/clips") or []
