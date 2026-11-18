@@ -4,6 +4,7 @@ Spikes are handed to a small shared pool, so a busy launch night with ten
 channels spiking at once queues cuts instead of starting ten engine jobs.
 """
 
+import json
 import logging
 import threading
 import time
@@ -41,6 +42,7 @@ class Clipper:
                                        thread_name_prefix="clip")
         # Cutting is quick and must happen before the buffer rolls past the
         # moment, so it never waits behind engine jobs (which take minutes).
+        self._pending_lock = threading.Lock()
         self.cut_pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="cut")
 
     def submit(self, ch: Channel, rec: Recorder, spike: Spike) -> None:
@@ -88,6 +90,56 @@ class Clipper:
             on_full=lambda: log.info("%s: Clips Kitty queue is full; waiting for room", ch.key),
         )
         log.info("%s: Clips Kitty job %s started for %s", ch.key, job_id, out.name)
+        self._remember(ch, job_id, video_id, stamp, spike.score)
+        return self.finish(ch, job_id, video_id, stamp, spike.score)
+
+    # Jobs handed to the app and not yet delivered, kept on disk: closing the
+    # Clipador used to forget them, and their clips never reached Telegram.
+    @property
+    def _pending_path(self) -> Path:
+        return self.cfg.work_dir / "pending_jobs.json"
+
+    def _pending(self) -> list[dict]:
+        try:
+            return json.loads(self._pending_path.read_text("utf-8"))
+        except (OSError, ValueError):
+            return []
+
+    def _remember(self, ch: Channel, job_id: int, video_id: str, stamp: str, score: float) -> None:
+        with self._pending_lock:
+            rows = [r for r in self._pending() if r.get("job_id") != job_id]
+            rows.append({"job_id": job_id, "video_id": video_id, "stamp": stamp, "score": score,
+                         "platform": ch.platform, "name": ch.name, "label": ch.label})
+            self._pending_path.parent.mkdir(parents=True, exist_ok=True)
+            self._pending_path.write_text(json.dumps(rows), "utf-8")
+
+    def _forget(self, job_id: int) -> None:
+        with self._pending_lock:
+            rows = [r for r in self._pending() if r.get("job_id") != job_id]
+            try:
+                self._pending_path.write_text(json.dumps(rows), "utf-8")
+            except OSError:
+                pass
+
+    def resume_pending(self) -> int:
+        """Pick up the jobs a previous run was waiting on; deliver them when done."""
+        rows = self._pending()
+        for r in rows:
+            ch = Channel(platform=r["platform"], name=r["name"], label=r.get("label", ""))
+            log.info("%s: picking up Clips Kitty job %s from the last run", ch.key, r["job_id"])
+            self.pool.submit(self._safe, self.finish, ch, int(r["job_id"]), r["video_id"],
+                             r["stamp"], float(r.get("score") or 0))
+        return len(rows)
+
+    def finish(self, ch: Channel, job_id: int, video_id: str, stamp: str, score: float) -> str | None:
+        try:
+            return self._finish(ch, job_id, video_id, stamp, score)
+        finally:
+            self._forget(job_id)
+
+    def _finish(self, ch: Channel, job_id: int, video_id: str, stamp: str, score: float) -> str | None:
+        name = ch.label or ch.name
+        url = live_url(ch.platform, ch.name)
 
         def waiting(job: dict, waited: float) -> None:
             status = job.get("status")
@@ -111,7 +163,7 @@ class Clipper:
             log.info("%s: clip %s ready (publishing off): %s", ch.key, clip["id"], clip.get("path"))
             return clip.get("path")
         if self.telegram is not None:
-            return self._deliver(ch, clip, spike, name, url)
+            return self._deliver(ch, clip, score, name, url)
         targets = self.ledger.allowed(self.cfg.platforms, self.cfg.limits)
         if not targets:
             log.info("%s: clip %s kept, every platform is at its cap or gap", ch.key, clip["id"])
@@ -130,17 +182,18 @@ class Clipper:
         return clip.get("path")
 
 
-    def _deliver(self, ch: Channel, clip: dict, spike: Spike, name: str, url: str) -> str | None:
+    def _deliver(self, ch: Channel, clip: dict, score: float, name: str, url: str) -> str | None:
         post = compose(clip, channel=name, platform=ch.platform, source_url=url,
                        hashtags=self.cfg.hashtags, credit_template=self.cfg.credit,
                        platforms=["tiktok"], privacy={})
-        short = f"{post.title}\n{name} · chat x{spike.score:.0f}"
+        short = f"{post.title}\n{name} · chat x{score:.0f}"
         try:
             self.telegram.send_clip(Path(clip["path"]), short, post.overrides["tiktok"]["title"])
         except NotifyError as e:
             log.error("%s: telegram delivery of clip %s failed: %s", ch.key, clip["id"], e)
             return clip.get("path")
         log.info("%s: clip %s sent to Telegram", ch.key, clip["id"])
+        return clip.get("path")
         return clip.get("path")
 
 
@@ -244,6 +297,7 @@ def run(cfg: Config) -> None:
     if engine.resume_queue():
         log.info("Clips Kitty queue turned on: clips are processed as they arrive")
     clipper = Clipper(cfg, engine)
+    clipper.resume_pending()
     workers = [ChannelWorker(ch, cfg, clipper, stop) for ch in cfg.channels]
     for w in workers:
         w.start()

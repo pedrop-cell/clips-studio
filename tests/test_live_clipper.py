@@ -627,3 +627,23 @@ def test_twitch_records_with_streamlink_without_ads(tmp_path, monkeypatch):
     cmds.clear()
     rmod.Recorder("twitch", "x", tmp_path).start()
     assert "-f" in cmds[0]
+
+
+def test_jobs_waited_on_survive_a_restart(tmp_path):
+    import json as _json
+
+    from live_clipper.config import Channel
+    from live_clipper.runner import Clipper
+
+    engine = FakeEngine(tmp_path / "clip.mp4")
+    clipper = Clipper(make_cfg(tmp_path), engine=engine)
+    clipper._remember(Channel("twitch", "kaicenat"), 4, "local_abc", "20261118-140208", 3.1)
+    assert _json.loads((tmp_path / "pending_jobs.json").read_text())[0]["job_id"] == 4
+
+    again = Clipper(make_cfg(tmp_path), engine=engine)  # the next run
+    again.telegram = FakeTelegram()
+    assert again.resume_pending() == 1
+    again.pool.shutdown(wait=True)
+    (video, short, full), = again.telegram.sent
+    assert "kaicenat" in short
+    assert _json.loads((tmp_path / "pending_jobs.json").read_text()) == []
