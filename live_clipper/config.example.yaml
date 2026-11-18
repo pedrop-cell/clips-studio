@@ -16,6 +16,7 @@ channels:
   - twitch:gaules
   - twitch:xqc
   - twitch:kaicenat
+  - youtube:@mountzera
   - kick:n3on
   # - https://www.youtube.com/@canal
   # - {platform: twitch, name: someone, label: "Nome que aparece nos créditos"}

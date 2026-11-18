@@ -95,10 +95,12 @@ class Recorder:
         self.quality = quality
         self._dl: subprocess.Popen | None = None
         self._ff: subprocess.Popen | None = None
+        self._dl_log = None
+        self.started_at = 0.0
 
     def start(self) -> None:
         self.folder.mkdir(parents=True, exist_ok=True)
-        dl_cmd = [*ytdlp_cmd(), "--quiet", "--no-warnings", "--no-part", "-f", self.quality, "-o", "-"]
+        dl_cmd = [*ytdlp_cmd(), "--quiet", "--no-part", "-f", self.quality, "-o", "-"]
         if self.platform == "kick":
             dl_cmd += ["--impersonate", "chrome"]
         dl_cmd.append(live_url(self.platform, self.channel))
@@ -111,7 +113,12 @@ class Recorder:
         # "UTC0" is read the same by glibc and the Windows C runtime, so segment
         # names are UTC wall-clock on a Windows PC too.
         env = {**os.environ, "TZ": "UTC0"}
-        self._dl = subprocess.Popen(dl_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        # yt-dlp's errors go to a file next to the buffer, so a recorder that
+        # keeps dying can say why (last_error).
+        self._close_log()
+        self._dl_log = open(self.log_path, "wb")  # closed in stop()
+        self._dl = subprocess.Popen(dl_cmd, stdout=subprocess.PIPE, stderr=self._dl_log)
+        self.started_at = time.time()
         self._ff = subprocess.Popen(ff_cmd, stdin=self._dl.stdout, env=env,
                                     stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         if self._dl.stdout:
@@ -130,6 +137,34 @@ class Recorder:
                 except subprocess.TimeoutExpired:
                     p.kill()
         self._dl = self._ff = None
+        self._close_log()
+
+    @property
+    def log_path(self) -> Path:
+        return self.folder / "yt-dlp.log"
+
+    def _close_log(self) -> None:
+        if self._dl_log is not None:
+            try:
+                self._dl_log.close()
+            except OSError:
+                pass
+            self._dl_log = None
+
+    def last_error(self, max_chars: int = 600) -> str:
+        """The tail of what yt-dlp (and ffmpeg) printed before dying."""
+        parts = []
+        try:
+            parts.append(self.log_path.read_text("utf-8", "replace").strip())
+        except OSError:
+            pass
+        if self._ff and self._ff.poll() is not None and self._ff.stderr:
+            try:
+                parts.append(self._ff.stderr.read().decode("utf-8", "replace").strip())
+            except (OSError, ValueError):
+                pass
+        text = " | ".join(p for p in parts if p)
+        return text[-max_chars:]
 
     def prune(self, now: float | None = None, keep_s: int | None = None) -> None:
         horizon = (now or time.time()) - (keep_s or self.buffer_s)

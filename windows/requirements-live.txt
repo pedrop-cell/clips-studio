@@ -2,5 +2,7 @@
 # the AI) runs inside the Clips Kitty app, not here.
 PyYAML>=6.0.3,<7
 websockets>=14,<17
-yt-dlp>=2026.8.19
+# [default] brings yt-dlp-ejs, the YouTube player solver (with Deno) that
+# recording a YouTube live needs; it is pinned to match each yt-dlp release.
+yt-dlp[default]>=2026.8.19
 curl_cffi>=0.15.0,<0.16

@@ -448,3 +448,10 @@ def test_youtube_chat_reader_polls_until_chat_ends():
         reader._session(lambda ts, text: got.append(text), stop)
     assert got == ["KKKKKK :joy:", "CLIPA"] * 2
     assert len(calls) == 3
+
+
+def test_recorder_reports_why_yt_dlp_died(tmp_path):
+    rec = Recorder("youtube", "@mount", tmp_path)
+    assert rec.last_error() == ""
+    rec.log_path.write_text("ERROR: [youtube] abc: Requested format is not available\n")
+    assert "Requested format is not available" in rec.last_error()
