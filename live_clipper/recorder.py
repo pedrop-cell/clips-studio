@@ -14,6 +14,7 @@ import logging
 import os
 import shutil
 import subprocess
+import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -74,7 +75,7 @@ def ffmpeg_bin() -> str:
 
 def ytdlp_cmd() -> list[str]:
     exe = shutil.which("yt-dlp")
-    return [exe] if exe else ["python", "-m", "yt_dlp"]
+    return [exe] if exe else [sys.executable, "-m", "yt_dlp"]
 
 
 class Recorder:
@@ -159,9 +160,9 @@ def is_live(platform: str, channel: str) -> bool:
 
     opts = {"quiet": True, "no_warnings": True, "skip_download": True}
     if platform == "kick":
-        from sources.kick import _impersonation
+        from live_clipper.chat import impersonation
 
-        opts.update(_impersonation())
+        opts.update(impersonation())
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(live_url(platform, channel), download=False)

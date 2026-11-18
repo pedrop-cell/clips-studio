@@ -285,3 +285,54 @@ def test_upload_post_mode_respects_caps(tmp_path):
     for _ in range(2):
         clipper.handle(Channel("twitch", "coringa"), FakeRecorder(), spike, sleep=lambda s: None)
     assert len(engine.published) == 1
+
+
+# ---- Windows setup helpers ---------------------------------------------------
+
+
+def test_envfile_round_trip_never_overrides(tmp_path, monkeypatch):
+    from live_clipper import envfile
+
+    p = tmp_path / "clipador.env"
+    envfile.save(p, {"TELEGRAM_BOT_TOKEN": "1:abc", "TELEGRAM_CHAT_ID": "42"})
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "7")
+    envfile.load(p)
+    import os
+
+    assert os.environ["TELEGRAM_BOT_TOKEN"] == "1:abc"
+    assert os.environ["TELEGRAM_CHAT_ID"] == "7"  # an explicit env var wins
+    envfile.load(tmp_path / "missing.env")  # no file is fine
+
+
+def test_setup_writes_config_with_local_work_dir(tmp_path):
+    from live_clipper.setup import write_config
+
+    cfg = lc_config.load(write_config(tmp_path))
+    assert cfg.work_dir == (tmp_path / "dados").resolve()
+    assert cfg.mode == "telegram"
+
+
+def test_setup_waits_for_the_first_message():
+    from live_clipper.setup import wait_chat_id
+
+    answers = iter([None, None, "123"])
+    assert wait_chat_id("t", sleep=lambda s: None, find=lambda t: next(answers)) == "123"
+
+
+def test_setup_rejects_a_bad_token():
+    from live_clipper.setup import ask_token
+
+    answers = iter(["oi", "123456789:" + "A" * 35])
+    assert ask_token(ask=lambda prompt: next(answers)).startswith("123456789:")
+
+
+def test_find_chat_id_reads_latest_message(monkeypatch):
+    import io
+
+    from live_clipper import notify
+
+    body = {"ok": True, "result": [{"message": {"chat": {"id": 1}}}, {"message": {"chat": {"id": 99}}}]}
+    monkeypatch.setattr(notify.urllib.request, "urlopen",
+                        lambda url, timeout: io.BytesIO(json.dumps(body).encode()))
+    assert notify.find_chat_id("t") == "99"

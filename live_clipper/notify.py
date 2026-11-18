@@ -47,6 +47,10 @@ class Telegram:
             raise NotifyError(f"telegram {method}: {res.get('description')}")
         return res
 
+    def send_text(self, text: str) -> None:
+        body = json.dumps({"chat_id": self.chat_id, "text": text[:4000]}).encode()
+        self._post("sendMessage", body, "application/json")
+
     def send_clip(self, video: Path, short_caption: str, full_caption: str) -> None:
         body, ctype = encode(
             [("chat_id", self.chat_id), ("caption", short_caption[:1000]),
@@ -54,5 +58,21 @@ class Telegram:
             [("video", Path(video))],
         )
         self._post("sendVideo", body, ctype, timeout=300)
-        text = json.dumps({"chat_id": self.chat_id, "text": full_caption[:4000]}).encode()
-        self._post("sendMessage", text, "application/json")
+        self.send_text(full_caption)
+
+
+def find_chat_id(token: str, api: str = "https://api.telegram.org") -> str | None:
+    """The chat id of the latest message sent to the bot, or None."""
+    try:
+        with urllib.request.urlopen(f"{api}/bot{token}/getUpdates", timeout=30) as r:
+            res = json.loads(r.read() or b"{}")
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        raise NotifyError(f"telegram getUpdates: {e}") from e
+    if not res.get("ok"):
+        raise NotifyError(f"telegram getUpdates: {res.get('description')}")
+    for update in reversed(res.get("result") or []):
+        msg = update.get("message") or update.get("channel_post") or {}
+        chat = msg.get("chat") or {}
+        if "id" in chat:
+            return str(chat["id"])
+    return None

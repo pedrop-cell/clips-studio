@@ -106,17 +106,29 @@ class TwitchChat:
                 pass
 
 
+def impersonation() -> dict:
+    """yt-dlp options to look like Chrome to Cloudflare (needs curl_cffi).
+
+    The same trick sources/kick.py uses, kept here so the clipper imports
+    nothing from the engine's pipeline and runs on a bare Python install.
+    """
+    try:
+        from yt_dlp.networking.impersonate import ImpersonateTarget
+
+        return {"impersonate": ImpersonateTarget.from_str("chrome")}
+    except Exception:
+        return {}
+
+
 def kick_chatroom_id(slug: str) -> int:
     """Kick's chatroom id for a channel slug (one Cloudflare-impersonated GET)."""
     import yt_dlp
     from yt_dlp.networking import Request
 
-    from sources.kick import _impersonation
-
     url = f"https://kick.com/api/v2/channels/{slug}"
-    with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True, **_impersonation()}) as ydl:
+    with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True, **impersonation()}) as ydl:
         with ydl.urlopen(Request(url, headers={"Accept": "application/json"},
-                                 extensions=_impersonation())) as resp:
+                                 extensions=impersonation())) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     return int(data["chatroom"]["id"])
 
