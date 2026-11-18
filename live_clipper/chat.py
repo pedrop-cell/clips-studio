@@ -8,6 +8,10 @@ from Kick's channel endpoint, behind the same Cloudflare impersonation that
 downloading a Kick VOD already depends on (sources/kick.py). Unofficial: if
 Kick changes it, the Kick reader logs and retries, and Twitch keeps working.
 
+YouTube: the same polling YouTube's own popout chat page does (the
+`live_chat/get_live_chat` call of its web API, with the public key the page
+embeds). Unofficial too; it logs and retries the same way.
+
 Each reader runs `run(on_message, stop)` on its own thread and calls
 `on_message(ts, text)` for every chat line, reconnecting on its own.
 """
@@ -15,10 +19,12 @@ Each reader runs `run(on_message, stop)` on its own thread and calls
 import json
 import logging
 import random
+import re
 import socket
 import ssl
 import threading
 import time
+import urllib.request
 from collections.abc import Callable
 
 log = logging.getLogger("live_clipper.chat")
@@ -193,9 +199,128 @@ class KickChat:
                     on_message(time.time(), text)
 
 
+YT_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+         "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+_CONT_KINDS = ("invalidationContinuationData", "timedContinuationData",
+               "reloadContinuationData", "liveChatReplayContinuationData")
+
+
+def _http(url: str, body: dict | None = None, timeout: float = 20) -> str:
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(url, data=data, headers={
+        "User-Agent": YT_UA, "Accept-Language": "pt-BR,pt;q=0.9",
+        **({"Content-Type": "application/json"} if data else {}),
+    })
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read().decode("utf-8", "replace")
+
+
+def parse_youtube_chat_page(html: str) -> tuple[str, str, str]:
+    """(api key, client version, first continuation) from the popout chat page."""
+    key = re.search(r'"INNERTUBE_API_KEY"\s*:\s*"([^"]+)"', html)
+    ver = re.search(r'"INNERTUBE_CLIENT_VERSION"\s*:\s*"([^"]+)"', html)
+    cont = re.search(r'"(?:invalidation|timed|reload)ContinuationData"\s*:\s*\{(?:[^{}]|\{[^{}]*\})*?'
+                     r'"continuation"\s*:\s*"([^"]+)"', html)
+    if not (key and cont):
+        raise OSError("youtube chat page without a key or continuation (chat off or not live?)")
+    return key.group(1), (ver.group(1) if ver else "2.20260101.00.00"), cont.group(1)
+
+
+def _runs_text(message: dict | None) -> str:
+    out = []
+    for run in (message or {}).get("runs") or []:
+        if "text" in run:
+            out.append(run["text"])
+        elif "emoji" in run:
+            emoji = run["emoji"]
+            shortcuts = emoji.get("shortcuts") or []
+            out.append(shortcuts[0] if shortcuts else emoji.get("emojiId", ""))
+    return "".join(out)
+
+
+def parse_youtube_chat(data: dict) -> tuple[list[tuple[float | None, str]], str | None, float]:
+    """Messages, next continuation and wait (s) from one get_live_chat answer.
+
+    Each message is (timestamp or None, text). A None continuation means the
+    chat ended.
+    """
+    lcc = (data.get("continuationContents") or {}).get("liveChatContinuation") or {}
+    msgs: list[tuple[float | None, str]] = []
+    for action in lcc.get("actions") or []:
+        item = (action.get("addChatItemAction") or {}).get("item") or {}
+        for kind in ("liveChatTextMessageRenderer", "liveChatPaidMessageRenderer"):
+            r = item.get(kind)
+            if not r:
+                continue
+            text = _runs_text(r.get("message"))
+            if not text:
+                continue
+            try:
+                ts = int(r["timestampUsec"]) / 1e6
+            except (KeyError, ValueError, TypeError):
+                ts = None
+            msgs.append((ts, text))
+    cont, wait = None, 5.0
+    for c in lcc.get("continuations") or []:
+        for kind in _CONT_KINDS:
+            if kind in c and c[kind].get("continuation"):
+                cont = c[kind]["continuation"]
+                if c[kind].get("timeoutMs"):
+                    wait = int(c[kind]["timeoutMs"]) / 1000
+                break
+        if cont:
+            break
+    return msgs, cont, min(max(wait, 1.0), 10.0)
+
+
+class YouTubeChat:
+    def __init__(self, channel: str, http: Callable[..., str] = _http,
+                 video_id: Callable[[str], str | None] | None = None):
+        self.channel = channel
+        self._http = http
+        if video_id is None:
+            from live_clipper.recorder import youtube_live_video_id as video_id
+        self._video_id = video_id
+
+    def run(self, on_message: OnMessage, stop: threading.Event) -> None:
+        backoff = 5.0
+        while not stop.is_set():
+            try:
+                self._session(on_message, stop)
+                backoff = 5.0
+            except Exception as e:  # HTTP, JSON and page changes all mean retry
+                log.warning("youtube chat %s: %s; reconnecting in %.0fs", self.channel, e, backoff)
+            stop.wait(backoff)
+            backoff = min(backoff * 2, 120.0)
+
+    def _session(self, on_message: OnMessage, stop: threading.Event) -> None:
+        vid = self._video_id(self.channel)
+        if not vid:
+            raise OSError("not live")
+        html = self._http(f"https://www.youtube.com/live_chat?is_popout=1&v={vid}")
+        key, version, cont = parse_youtube_chat_page(html)
+        log.info("youtube chat: joined %s (video %s)", self.channel, vid)
+        url = f"https://www.youtube.com/youtubei/v1/live_chat/get_live_chat?key={key}&prettyPrint=false"
+        ctx = {"client": {"clientName": "WEB", "clientVersion": version, "hl": "pt", "gl": "BR"}}
+        while not stop.is_set():
+            data = json.loads(self._http(url, {"context": ctx, "continuation": cont}))
+            msgs, nxt, wait = parse_youtube_chat(data)
+            now = time.time()
+            for ts, text in msgs:
+                # YouTube hands chat over in batches; keep each line's own time,
+                # within reason, so a burst stays a burst.
+                on_message(now if ts is None else min(now, max(ts, now - 30)), text)
+            if nxt is None:
+                raise OSError("chat ended")
+            cont = nxt
+            stop.wait(wait)
+
+
 def reader_for(platform: str, channel: str, **kw):
     if platform == "twitch":
         return TwitchChat(channel)
     if platform == "kick":
         return KickChat(channel, **kw)
+    if platform == "youtube":
+        return YouTubeChat(channel, **kw)
     raise ValueError(f"no chat reader for {platform!r}")
