@@ -15,7 +15,9 @@ from collections.abc import Callable
 
 
 class EngineError(RuntimeError):
-    pass
+    def __init__(self, msg: str, status: int | None = None):
+        super().__init__(msg)
+        self.status = status
 
 
 class Engine:
@@ -33,7 +35,7 @@ class Engine:
                 raw = r.read()
         except urllib.error.HTTPError as e:
             detail = e.read().decode("utf-8", "replace")[:400]
-            raise EngineError(f"{method} {path}: HTTP {e.code} {detail}") from e
+            raise EngineError(f"{method} {path}: HTTP {e.code} {detail}", e.code) from e
         except (urllib.error.URLError, OSError) as e:
             raise EngineError(f"{method} {path}: {e}") from e
         return json.loads(raw) if raw else None
@@ -45,10 +47,23 @@ class Engine:
             return False
 
     def submit_local(self, path: str, *, title: str, channel: str, platform: str,
-                     source_url: str, options: dict) -> tuple[int, str]:
+                     source_url: str, options: dict, queue_wait_s: float = 1800,
+                     on_full: Callable[[], None] | None = None) -> tuple[int, str]:
         body = {"path": path, "title": title, "channel": channel, "platform": platform,
                 "source_url": source_url, **options}
-        res = self._call("POST", "/videos/local", body)
+        # The app's queue holds 5 videos at most and answers 409 when full; a
+        # busy night fills it, so wait for room instead of dropping the clip.
+        deadline = time.monotonic() + queue_wait_s
+        while True:
+            try:
+                res = self._call("POST", "/videos/local", body)
+                break
+            except EngineError as e:
+                if e.status != 409 or time.monotonic() > deadline:
+                    raise
+                if on_full:
+                    on_full()
+                self._sleep(30)
         if not res or res.get("job_id") is None:
             raise EngineError(f"engine did not queue {path}: {res}")
         return int(res["job_id"]), str(res["video_id"])
@@ -72,6 +87,15 @@ class Engine:
             if now > deadline:
                 raise EngineError(f"job {job_id} still {job and job.get('status')} after {timeout_s:.0f}s")
             self._sleep(every_s)
+
+    def resume_queue(self) -> bool:
+        """Turn the app's queue on. It starts stopped ("press Start queue"),
+        which left clips waiting until someone pressed it by hand."""
+        try:
+            self._call("POST", "/queue/resume", {}, timeout=10)
+            return True
+        except EngineError:
+            return False
 
     def queue_paused(self) -> bool:
         try:

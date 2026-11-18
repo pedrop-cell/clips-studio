@@ -558,3 +558,34 @@ def test_ffmpeg_errors_go_to_a_file_not_a_pipe(tmp_path, monkeypatch):
     rec._ff_log.flush()
     assert "Packet corrupt" in rec.last_error()
     assert "0 pedaços" in rec.describe()
+
+
+def test_submit_waits_for_room_in_a_full_queue_and_resume_calls_the_api():
+    from live_clipper.engine import Engine, EngineError
+
+    calls = []
+    answers = [EngineError("full", 409), EngineError("full", 409), {"job_id": 9, "video_id": "local_x"}]
+
+    def fake_call(method, path, body=None, timeout=60):
+        calls.append((method, path))
+        if path == "/videos/local":
+            a = answers.pop(0)
+            if isinstance(a, Exception):
+                raise a
+            return a
+        return {"paused": False}
+
+    eng = Engine(sleep=lambda s: None)
+    eng._call = fake_call
+    fulls = []
+    assert eng.submit_local("c.mp4", title="t", channel="c", platform="twitch", source_url="u",
+                            options={}, on_full=lambda: fulls.append(1)) == (9, "local_x")
+    assert len(fulls) == 2
+    assert eng.resume_queue() and ("POST", "/queue/resume") in calls
+
+    def bad(method, path, body=None, timeout=60):
+        raise EngineError("nope", 400)
+
+    eng._call = bad
+    with pytest.raises(EngineError):
+        eng.submit_local("c.mp4", title="t", channel="c", platform="twitch", source_url="u", options={})

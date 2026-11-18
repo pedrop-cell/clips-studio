@@ -81,12 +81,17 @@ class Clipper:
         job_id, video_id = self.engine.submit_local(
             str(out), title=f"{name} ao vivo {stamp}", channel=ch.name, platform=ch.platform,
             source_url=url, options=self.cfg.engine_options,
+            on_full=lambda: log.info("%s: Clips Kitty queue is full; waiting for room", ch.key),
         )
         log.info("%s: Clips Kitty job %s started for %s", ch.key, job_id, out.name)
 
         def waiting(job: dict, waited: float) -> None:
             status = job.get("status")
-            extra = " (a fila do Clips Kitty está PAUSADA)" if status == "queued" and self.engine.queue_paused() else ""
+            extra = ""
+            if status == "queued" and self.engine.queue_paused():
+                # Someone pressed Stop queue in the app; clips must not sit there.
+                self.engine.resume_queue()
+                extra = " (the app's queue was stopped; turned it back on)"
             log.info("%s: Clips Kitty job %s still %s after %.0f min%s", ch.key, job_id, status,
                      waited / 60, extra)
 
@@ -210,6 +215,8 @@ def run(cfg: Config) -> None:
     while not engine.healthy():
         log.info("waiting for the engine at %s", cfg.engine_url)
         time.sleep(5)
+    if engine.resume_queue():
+        log.info("Clips Kitty queue turned on: clips are processed as they arrive")
     clipper = Clipper(cfg, engine)
     workers = [ChannelWorker(ch, cfg, clipper, stop) for ch in cfg.channels]
     for w in workers:
