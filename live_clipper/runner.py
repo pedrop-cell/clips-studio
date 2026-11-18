@@ -141,6 +141,7 @@ class ChannelWorker(threading.Thread):
         rec.start()
         chat_thread.start()
         last_live_check = time.time()
+        restart_wait, next_restart, restarting = 2.5, 0.0, False
         try:
             while not self.stop.is_set():
                 self.stop.wait(1)
@@ -154,12 +155,23 @@ class ChannelWorker(threading.Thread):
                 if int(now) % 30 == 0:
                     # Keep a little extra past the buffer for cuts still waiting.
                     rec.prune(now, self.cfg.buffer_s + self.cfg.pre_s + self.cfg.post_s)
-                if not rec.alive():
+                if not restarting and not rec.alive():
                     if now - last_live_check > 20 and not is_live(self.ch.platform, self.ch.name):
                         log.info("%s went offline", self.ch.key)
                         return
                     last_live_check = now
+                    # A recorder that dies right away would otherwise restart
+                    # every second; back off and say why it died.
+                    quick = now - rec.started_at < 60
+                    restart_wait = min(restart_wait * 2, 120.0) if quick else 5.0
+                    why = rec.last_error()
+                    log.warning("%s: recording stopped%s; retrying in %.0fs", self.ch.key,
+                                f" ({why})" if why else "", restart_wait)
                     rec.stop()
+                    next_restart = now + restart_wait
+                    restarting = True
+                if restarting and now >= next_restart:
+                    restarting = False
                     rec.start()
         finally:
             session_stop.set()
