@@ -11,8 +11,8 @@ channel in its list that is live, it:
 3. watches for a **chat spike**: the chat rate jumping to several times the
    channel's own usual rate, with reactions (KEKW, kkkk, CLIP, ???) counting
    double,
-4. cuts the moment out of the buffer (25 s before the spike's onset, 15 s
-   after), with no re-encode,
+4. cuts the moment out of the buffer (14 s before the spike's onset, 16 s
+   after: about 30 s, with the moment in the first seconds), with no re-encode,
 5. hands the cut to the engine as a local file with the Gaming / Reaction
    layout and one clip, so it comes back framed 9:16 with captions, title
    and hashtags, and
@@ -52,7 +52,10 @@ most:
 |---|---|---|
 | `detection.ratio` | 3.0 | Spike = recent chat rate this many times the baseline. Lower = more clips |
 | `detection.cooldown_s` | 90 | At most one clip per channel in this long |
-| `pre_s` / `post_s` | 25 / 15 | Seconds kept before / after the spike's onset |
+| `pre_s` / `post_s` | 14 / 16 | Seconds kept before / after the spike's onset. A copy still on the old 25 / 15 gets 14 / 16 |
+| `clip_style.hook` | true | Big title at the top for the first `hook_s` (3) seconds, burned with ffmpeg before the clip goes to Telegram |
+| `clip_style.outro` | false | The app's end card. Turned off at start, so the clip ends on the moment and loops |
+| `engine_options.caption_style` | middle, 3 words | Captions from the first word, in the middle of the frame, clear of the platforms' buttons |
 | `max_parallel_jobs` | 2 | Engine jobs at once. On a CPU-only host keep it at 1–2 |
 
 ### Telegram (free mode)

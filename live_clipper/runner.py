@@ -19,6 +19,7 @@ from live_clipper.engine import Engine, EngineError, best_clip
 from live_clipper.notify import NotifyError, Telegram
 from live_clipper.poster import Ledger, compose
 from live_clipper.recorder import Recorder, is_live, live_url
+from live_clipper.style import with_hook
 from live_clipper.trends import TrendsWorker
 
 log = logging.getLogger("live_clipper")
@@ -201,6 +202,8 @@ class Clipper:
         short = f"{post.title}\n{name} · {note}"
         try:
             video = self._local_copy(clip)
+            video = with_hook(video, post.title, name, self.cfg.clip_style,
+                              self.cfg.work_dir / "outbox")
             self.telegram.send_clip(video, short, post.overrides["tiktok"]["title"])
         except (NotifyError, EngineError) as e:
             log.error("%s: telegram delivery of clip %s failed: %s", ch.key, clip["id"], e)
@@ -300,6 +303,12 @@ class ChannelWorker(threading.Thread):
             rec.stop()
 
 
+def prepare_engine(cfg: Config, engine: Engine) -> None:
+    """App settings the clips need that no job option carries."""
+    if not cfg.clip_style.outro and engine.set_outro(False):
+        log.info("Clips Kitty end card turned off: clips end on the moment and loop")
+
+
 def run(cfg: Config) -> None:
     stop = threading.Event()
     engine = Engine(cfg.engine_url)
@@ -308,6 +317,7 @@ def run(cfg: Config) -> None:
         time.sleep(5)
     if engine.resume_queue():
         log.info("Clips Kitty queue turned on: clips are processed as they arrive")
+    prepare_engine(cfg, engine)
     clipper = Clipper(cfg, engine)
     clipper.resume_pending()
     workers = [ChannelWorker(ch, cfg, clipper, stop) for ch in cfg.channels]

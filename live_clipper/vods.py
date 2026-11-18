@@ -234,7 +234,7 @@ class VodWorker(threading.Thread):
 def main() -> None:
     from live_clipper import config, envfile
     from live_clipper.engine import Engine
-    from live_clipper.runner import Clipper
+    from live_clipper.runner import Clipper, prepare_engine
 
     ap = argparse.ArgumentParser(prog="live_clipper.vods",
                                  description="Clip today's finished lives of the watched channels.")
@@ -251,6 +251,7 @@ def main() -> None:
         return
     print("Procurando as lives de hoje dos streamers da lista... Cada live leva um tempo no app;"
           " deixe esta janela aberta.")
+    prepare_engine(cfg, engine)
     n = run_once(cfg, Clipper(cfg, engine))
     print(f"Pronto: {n} live(s) analisada(s); os cortes foram pro Telegram." if n
           else "Nenhuma live nova para analisar.")
