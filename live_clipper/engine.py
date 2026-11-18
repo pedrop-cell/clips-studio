@@ -68,6 +68,26 @@ class Engine:
             raise EngineError(f"engine did not queue {path}: {res}")
         return int(res["job_id"]), str(res["video_id"])
 
+    def submit_url(self, url: str, *, options: dict, queue_wait_s: float = 6 * 3600,
+                   on_full: Callable[[], None] | None = None) -> int | None:
+        """Queue a link (a VOD) for the app to download and clip. None when the
+        app says it already processed or queued that video."""
+        deadline = time.monotonic() + queue_wait_s
+        while True:
+            try:
+                res = self._call("POST", "/jobs", {"url": url, **options}) or {}
+                break
+            except EngineError as e:
+                if e.status != 409 or time.monotonic() > deadline:
+                    raise
+                if on_full:
+                    on_full()
+                self._sleep(60)
+        return int(res["job_id"]) if res.get("job_id") is not None else None
+
+    def job(self, job_id: int) -> dict:
+        return self._call("GET", f"/jobs/{job_id}") or {}
+
     def wait_job(self, job_id: int, timeout_s: float = 1800, every_s: float = 5,
                  on_wait: Callable[[dict, float], None] | None = None,
                  report_every_s: float = 120) -> dict:
@@ -145,3 +165,9 @@ def best_clip(clips: list[dict]) -> dict | None:
     """The highest-scoring clip that has a rendered file."""
     ready = [c for c in clips if c.get("path")]
     return max(ready, key=lambda c: c.get("score") or 0) if ready else None
+
+
+def best_clips(clips: list[dict], n: int) -> list[dict]:
+    """The `n` highest-scoring clips that have a rendered file."""
+    ready = [c for c in clips if c.get("path")]
+    return sorted(ready, key=lambda c: c.get("score") or 0, reverse=True)[:n]

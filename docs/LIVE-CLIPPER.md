@@ -165,3 +165,14 @@ Settings live under `trends:` (queries, `every_min`, `top`, `min_views`,
 python -m live_clipper.trends --once           # search now, send to Telegram
 python -m live_clipper.trends --once --print   # print instead of sending
 ```
+
+## Today's finished lives (VODs)
+
+Once a day at `vods.at` (06:00 by default, local time), the clipper lists each
+Twitch and YouTube channel's past broadcasts, sends every live that started in
+the last `lookback_h` hours to Clips Kitty as a full video, and forwards that
+video's best `max_clips` clips to Telegram. Each VOD is sent once
+(`vods_done.json` in the work dir). Kick is skipped. A full live takes the app
+a long time and it processes one video at a time, so live clips queued while a
+VOD is running wait behind it. `Clipar-Lives-de-Hoje.bat`
+(`python -m live_clipper.vods`) runs it immediately.
