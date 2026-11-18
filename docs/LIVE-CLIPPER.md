@@ -80,6 +80,27 @@ python -m live_clipper --config live_clipper.yaml --dry-run   # make clips, send
 Needs `ffmpeg` and `yt-dlp` on the PATH (both come with the engine's
 requirements and Docker image).
 
+### On a Windows PC, no Docker
+
+The simplest setup. The Clips Kitty app from the Microsoft Store runs the
+engine (and its first-run wizard sets up the AI); the clipper itself needs
+only Python, ffmpeg and four small packages.
+
+1. Install and open **Clips Kitty** from the Microsoft Store, and finish its
+   first-run setup.
+2. Download this repository (Code → Download ZIP) and extract it.
+3. Double-click **`Iniciar-Clipador.bat`**. The first run installs Python and
+   ffmpeg through winget if they are missing, makes a private Python
+   environment in `.venv-clipador`, then asks for the Telegram bot token and
+   finds the chat id by itself once you message the bot. It writes
+   `clipador.env` (the token) and `live_clipper.yaml` (the channel list).
+4. It checks the app, ffmpeg and Telegram, lists who is live, and starts.
+   Keep the window open; close it to stop. Every later run goes straight to
+   the check and start.
+
+`Iniciar-Clipador.bat --dry-run` makes clips without sending them. On
+Windows, recordings and cuts go to the `dados` folder next to the script.
+
 ### On an always-on server (Docker)
 
 ```bash

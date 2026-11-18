@@ -290,3 +290,8 @@ _test_*.py
 
 # Live clipper: your own channel list
 live_clipper.yaml
+
+# Live clipper on Windows: secrets, venv and recordings stay local
+clipador.env
+.venv-clipador/
+dados/
