@@ -49,11 +49,9 @@ if (-not (Test-Path $Py)) {
 if ($LASTEXITCODE -ne 0) { Falha "Nao consegui instalar os pacotes. Confira a internet e rode de novo." }
 $env:Path = (Join-Path $Venv "Scripts") + ";" + $env:Path
 
-if (-not (Test-Path (Join-Path $Root "clipador.env"))) {
-    Passo "Configurando o Telegram"
-    & $Py -m live_clipper.setup --folder $Root
-    if ($LASTEXITCODE -ne 0) { Falha "A configuracao do Telegram nao terminou." }
-}
+Passo "Conferindo o Telegram"
+& $Py -m live_clipper.setup --folder $Root --if-needed
+if ($LASTEXITCODE -ne 0) { Falha "A configuracao do Telegram nao terminou." }
 
 Passo "Esperando o app Clips Kitty"
 $ok = $false

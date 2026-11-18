@@ -53,6 +53,7 @@ def main() -> None:
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     envfile.load(Path(args.env))
+    envfile.load(Path(".env"))
     cfg = config.load(args.config)
     if args.dry_run:
         cfg.publish = False
