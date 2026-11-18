@@ -216,7 +216,7 @@ class FakeEngine:
         self.submitted.append((path, kw))
         return 7, "local_abc"
 
-    def wait_job(self, job_id):
+    def wait_job(self, job_id, **kw):
         return {"status": "done"}
 
     def clips(self, video_id):
@@ -514,3 +514,47 @@ def test_youtube_recorder_feeds_ffmpeg_the_stream_url(tmp_path, monkeypatch):
     assert cmd[cmd.index("-i") + 1] == "https://hls/x.m3u8"
     assert cmd[cmd.index("-headers") + 1] == "User-Agent: UA\r\n"
     assert rec.alive()
+
+
+def test_wait_job_reports_while_slow():
+    from live_clipper.engine import Engine
+
+    clock = [0.0]
+    states = iter(["queued", "running", "running", "done"])
+    eng = Engine(sleep=lambda s: clock.__setitem__(0, clock[0] + 100))
+    eng._call = lambda m, p, b=None, timeout=60: {"status": next(states)}
+    seen = []
+    import live_clipper.engine as emod
+
+    real = emod.time.monotonic
+    emod.time.monotonic = lambda: clock[0]
+    try:
+        job = eng.wait_job(1, on_wait=lambda j, w: seen.append((j["status"], w)), report_every_s=150)
+    finally:
+        emod.time.monotonic = real
+    assert job["status"] == "done"
+    assert seen == [("running", 200.0)]
+
+
+def test_ffmpeg_errors_go_to_a_file_not_a_pipe(tmp_path, monkeypatch):
+    from live_clipper import recorder as rmod
+
+    calls = []
+
+    class FakePopen:
+        def __init__(self, cmd, **kw):
+            calls.append(kw)
+            self.stdout = None
+            self.stderr = None
+
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(rmod.subprocess, "Popen", FakePopen)
+    rec = rmod.Recorder("twitch", "alanzoka", tmp_path)
+    rec.start()
+    assert all(kw.get("stderr") is not rmod.subprocess.PIPE for kw in calls)
+    rec._ff_log.write(b"[mpegts] Packet corrupt\n")
+    rec._ff_log.flush()
+    assert "Packet corrupt" in rec.last_error()
+    assert "0 pedaços" in rec.describe()

@@ -35,17 +35,30 @@ class Clipper:
             self.telegram = Telegram(cfg.telegram_token, cfg.telegram_chat_id)
         self.pool = ThreadPoolExecutor(max_workers=max(1, cfg.max_parallel_jobs),
                                        thread_name_prefix="clip")
+        # Cutting is quick and must happen before the buffer rolls past the
+        # moment, so it never waits behind engine jobs (which take minutes).
+        self.cut_pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="cut")
 
     def submit(self, ch: Channel, rec: Recorder, spike: Spike) -> None:
-        self.pool.submit(self._safe, ch, rec, spike)
+        self.cut_pool.submit(self._safe, self._cut_then_queue, ch, rec, spike)
 
-    def _safe(self, ch: Channel, rec: Recorder, spike: Spike) -> None:
+    def _safe(self, fn, ch: Channel, *args) -> None:
         try:
-            self.handle(ch, rec, spike)
+            fn(ch, *args)
         except Exception:
-            log.exception("%s: clip at %s failed", ch.key, spike.at)
+            log.exception("%s: clip failed", ch.key)
+
+    def _cut_then_queue(self, ch: Channel, rec: Recorder, spike: Spike) -> None:
+        cut = self.cut(ch, rec, spike)
+        if cut:
+            self.pool.submit(self._safe, self.process, ch, spike, *cut)
 
     def handle(self, ch: Channel, rec: Recorder, spike: Spike, sleep=time.sleep) -> str | None:
+        """Cut and process one spike, start to end (used by tests)."""
+        cut = self.cut(ch, rec, spike, sleep=sleep)
+        return self.process(ch, spike, *cut) if cut else None
+
+    def cut(self, ch: Channel, rec: Recorder, spike: Spike, sleep=time.sleep) -> tuple[Path, str] | None:
         t0 = spike.onset - self.cfg.pre_s
         t1 = spike.onset + self.cfg.post_s
         # Wait for the recording to pass the end of the window.
@@ -55,16 +68,29 @@ class Clipper:
         stamp = datetime.fromtimestamp(spike.onset, timezone.utc).strftime("%Y%m%d-%H%M%S")
         out = self.cfg.work_dir / "cuts" / ch.key / f"{stamp}.mp4"
         if rec.cut(t0, t1, out) is None:
-            log.warning("%s: nothing recorded for %s", ch.key, stamp)
+            why = rec.last_error(300)
+            log.warning("%s: nothing recorded for %s (%s)%s", ch.key, stamp, rec.describe(),
+                        f": {why}" if why else "")
             return None
-        log.info("%s: cut %s (chat x%.1f)", ch.key, out.name, spike.score)
+        log.info("%s: cut %s (chat x%.1f), sent to Clips Kitty", ch.key, out.name, spike.score)
+        return out, stamp
+
+    def process(self, ch: Channel, spike: Spike, out: Path, stamp: str) -> str | None:
         name = ch.label or ch.name
         url = live_url(ch.platform, ch.name)
         job_id, video_id = self.engine.submit_local(
             str(out), title=f"{name} ao vivo {stamp}", channel=ch.name, platform=ch.platform,
             source_url=url, options=self.cfg.engine_options,
         )
-        job = self.engine.wait_job(job_id)
+        log.info("%s: Clips Kitty job %s started for %s", ch.key, job_id, out.name)
+
+        def waiting(job: dict, waited: float) -> None:
+            status = job.get("status")
+            extra = " (a fila do Clips Kitty está PAUSADA)" if status == "queued" and self.engine.queue_paused() else ""
+            log.info("%s: Clips Kitty job %s still %s after %.0f min%s", ch.key, job_id, status,
+                     waited / 60, extra)
+
+        job = self.engine.wait_job(job_id, on_wait=waiting)
         if job.get("status") != "done":
             log.warning("%s: engine job %s %s: %s", ch.key, job_id, job.get("status"), job.get("error"))
             return None
