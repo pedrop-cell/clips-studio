@@ -17,6 +17,8 @@ def check(cfg: config.Config) -> int:
     ok = True
     if Engine(cfg.engine_url).healthy():
         print("[OK]  App Clips Kitty aberto e respondendo")
+        if Engine(cfg.engine_url).resume_queue():
+            print("[OK]  Fila do Clips Kitty ligada (processa os clipes sozinha)")
     else:
         ok = False
         print("[ERRO] App Clips Kitty não responde. Abra o app e deixe aberto.")
