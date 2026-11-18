@@ -216,6 +216,12 @@ class FakeEngine:
         self.submitted.append((path, kw))
         return 7, "local_abc"
 
+    def download_clip(self, clip_id, dest):
+        self.downloaded = [*getattr(self, "downloaded", []), clip_id]
+        Path(dest).parent.mkdir(parents=True, exist_ok=True)
+        Path(dest).write_bytes(b"mp4")
+        return Path(dest)
+
     def wait_job(self, job_id, **kw):
         return {"status": "done"}
 
@@ -621,7 +627,7 @@ def test_twitch_records_with_streamlink_without_ads(tmp_path, monkeypatch):
     monkeypatch.setattr(rmod.subprocess, "Popen", FakePopen)
     monkeypatch.setattr(rmod, "streamlink_cmd", lambda: ["streamlink"])
     rmod.Recorder("twitch", "paulinholokobr", tmp_path).start()
-    assert cmds[0][0] == "streamlink" and "--twitch-disable-ads" in cmds[0]
+    assert cmds[0][0] == "streamlink" and "--stdout" in cmds[0]
     assert "https://www.twitch.tv/paulinholokobr" in cmds[0]
     monkeypatch.setattr(rmod, "streamlink_cmd", lambda: None)
     cmds.clear()
@@ -647,3 +653,18 @@ def test_jobs_waited_on_survive_a_restart(tmp_path):
     (video, short, full), = again.telegram.sent
     assert "kaicenat" in short
     assert _json.loads((tmp_path / "pending_jobs.json").read_text()) == []
+
+
+def test_clip_in_the_store_apps_hidden_folder_is_fetched_from_the_app(tmp_path):
+    from live_clipper.config import Channel
+    from live_clipper.detector import Spike
+    from live_clipper.runner import Clipper
+
+    engine = FakeEngine(tmp_path / "AppData" / "not-visible.mp4")  # never created
+    clipper = Clipper(make_cfg(tmp_path), engine=engine)
+    clipper.telegram = FakeTelegram()
+    spike = Spike(at=1000.0, onset=995.0, rate=12, baseline=2, score=6)
+    clipper.handle(Channel("twitch", "coringa"), FakeRecorder(), spike, sleep=lambda s: None)
+    (video, short, full), = clipper.telegram.sent
+    assert video == tmp_path / "outbox" / "clip_3.mp4" and video.read_bytes() == b"mp4"
+    assert engine.downloaded == [3]

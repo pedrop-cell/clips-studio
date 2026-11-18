@@ -17,6 +17,7 @@ channels:
   - twitch:xqc
   - twitch:kaicenat
   - youtube:@mountzera
+  - twitch:mount
   - kick:n3on
   # - https://www.youtube.com/@canal
   # - {platform: twitch, name: someone, label: "Nome que aparece nos créditos"}
@@ -84,3 +85,15 @@ trends:
     - GTA 6 viral
     - GTA 6 shorts
     - GTA VI gameplay
+
+# Today's finished lives (VODs) of the channels above, clipped whole: once a
+# day the full video of each new Twitch/YouTube live goes to Clips Kitty, and
+# its best clips come to Telegram like the live ones. A full live takes the
+# app a long time (it does one video at a time), so this runs early in the
+# morning. Run Clipar-Lives-de-Hoje.bat to do it right now.
+vods:
+  enabled: true
+  at: "06:00"                   # local time (utc_offset_h above)
+  lookback_h: 24                # lives that started in the last 24 hours
+  max_clips: 5                  # clips sent to Telegram per live
+  max_vods: 4                   # lives sent to the app per day

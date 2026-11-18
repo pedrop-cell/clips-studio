@@ -43,6 +43,7 @@ class Clipper:
         # Cutting is quick and must happen before the buffer rolls past the
         # moment, so it never waits behind engine jobs (which take minutes).
         self._pending_lock = threading.Lock()
+        self.stop_event: threading.Event | None = None
         self.cut_pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="cut")
 
     def submit(self, ch: Channel, rec: Recorder, spike: Spike) -> None:
@@ -163,7 +164,7 @@ class Clipper:
             log.info("%s: clip %s ready (publishing off): %s", ch.key, clip["id"], clip.get("path"))
             return clip.get("path")
         if self.telegram is not None:
-            return self._deliver(ch, clip, score, name, url)
+            return self._deliver(ch, clip, f"chat x{score:.0f}", name, url)
         targets = self.ledger.allowed(self.cfg.platforms, self.cfg.limits)
         if not targets:
             log.info("%s: clip %s kept, every platform is at its cap or gap", ch.key, clip["id"])
@@ -182,18 +183,29 @@ class Clipper:
         return clip.get("path")
 
 
-    def _deliver(self, ch: Channel, clip: dict, score: float, name: str, url: str) -> str | None:
+    def _local_copy(self, clip: dict) -> Path:
+        """A file this process can read: the app's path when visible, else a
+        copy fetched from the app (the Store app's own folders are not)."""
+        path = Path(clip.get("path") or "")
+        if clip.get("path") and path.is_file():
+            return path
+        dest = self.cfg.work_dir / "outbox" / f"clip_{clip['id']}.mp4"
+        if not dest.is_file():
+            self.engine.download_clip(int(clip["id"]), dest)
+        return dest
+
+    def _deliver(self, ch: Channel, clip: dict, note: str, name: str, url: str) -> str | None:
         post = compose(clip, channel=name, platform=ch.platform, source_url=url,
                        hashtags=self.cfg.hashtags, credit_template=self.cfg.credit,
                        platforms=["tiktok"], privacy={})
-        short = f"{post.title}\n{name} · chat x{score:.0f}"
+        short = f"{post.title}\n{name} · {note}"
         try:
-            self.telegram.send_clip(Path(clip["path"]), short, post.overrides["tiktok"]["title"])
-        except NotifyError as e:
+            video = self._local_copy(clip)
+            self.telegram.send_clip(video, short, post.overrides["tiktok"]["title"])
+        except (NotifyError, EngineError) as e:
             log.error("%s: telegram delivery of clip %s failed: %s", ch.key, clip["id"], e)
             return clip.get("path")
         log.info("%s: clip %s sent to Telegram", ch.key, clip["id"])
-        return clip.get("path")
         return clip.get("path")
 
 
@@ -305,6 +317,11 @@ def run(cfg: Config) -> None:
     if cfg.trends.enabled and clipper.telegram is not None:
         TrendsWorker(cfg.trends, clipper.telegram, cfg.work_dir, stop).start()
         log.info("searching viral GTA 6 videos every %d min", cfg.trends.every_min)
+    if cfg.vods.enabled:
+        from live_clipper.vods import VodWorker
+
+        VodWorker(cfg, clipper, stop).start()
+        log.info("today's past lives (VODs) are sent to Clips Kitty daily at %s", cfg.vods.at)
     try:
         while any(w.is_alive() for w in workers):
             time.sleep(5)
