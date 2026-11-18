@@ -25,8 +25,8 @@ channels:
 work_dir: /data/live            # buffers, cuts and the post ledger
 engine_url: http://127.0.0.1:8765
 buffer_s: 600                   # seconds of each live kept on disk
-pre_s: 25                       # seconds kept before the chat spike's onset
-post_s: 15                      # and after it
+pre_s: 14                       # seconds kept before the chat spike's onset
+post_s: 16                      # and after it (about 30s: shorts hold best at 20-35s)
 live_check_s: 60                # how often an offline channel is checked
 max_parallel_jobs: 2            # engine jobs at once (raise on a GPU host)
 utc_offset_h: -3                # whose "day" the daily caps count (Brasília)
@@ -46,7 +46,20 @@ engine_options:
   captions: true
   max_clips: 1
   min_score: 0
-  focus: "the strongest reaction or hype moment; start right before it happens"
+  focus: "the single peak moment (the reaction, scream or play): start at most 2 seconds before it, no setup; keep it 20-35 seconds"
+  # Captions from the first word, 3 words at a time, in the middle of the
+  # frame (the bottom is under TikTok's and Shorts' buttons).
+  caption_style: {position: middle, words_per_caption: 3, uppercase: true, highlight: true}
+
+# How each clip looks when it reaches Telegram.
+clip_style:
+  hook: true                    # big title on the first frame ("ALANZOKA NAO ACREDITOU")
+  hook_s: 3                     # seconds it stays on screen
+  hook_text: "{title}"          # {title} = the clip's title, {channel} = the streamer
+  hook_font: Impact
+  hook_size: 92
+  hook_top: 230                 # px from the top, clear of TikTok's top bar
+  outro: false                  # the app's end card; off so the clip loops into its start
 
 publish:
   enabled: true                 # false = make clips, never send them (same as --dry-run)

@@ -8,6 +8,7 @@ from pathlib import Path
 import yaml
 
 from live_clipper.poster import Limits
+from live_clipper.style import ClipStyle
 from live_clipper.trends import TrendsConfig
 from live_clipper.vods import VodConfig
 
@@ -88,6 +89,16 @@ def parse_channel(entry) -> "Channel":
     return Channel(platform=platform, name=name, label=str(entry.get("label") or ""))
 
 
+# Cut 14s before the chat spike's onset and 16s after: about 30s, the length
+# short videos hold best (20-35s), with the moment itself in the first
+# seconds. Chat reacts a few seconds after what happened, so the onset is
+# just past the peak, not before it.
+PRE_S, POST_S = 14, 16
+# What earlier example configs said; a copy that still says exactly this
+# gets the new values (the person never chose them, they came with the file).
+_OLD_PRE_POST = (25, 15)
+
+
 @dataclass
 class Detection:
     window_s: int = 10
@@ -105,8 +116,8 @@ class Config:
     work_dir: Path = Path("/data/live")
     engine_url: str = "http://127.0.0.1:8765"
     buffer_s: int = 600
-    pre_s: int = 25
-    post_s: int = 15
+    pre_s: int = PRE_S
+    post_s: int = POST_S
     live_check_s: int = 60
     detection: Detection = field(default_factory=Detection)
     max_parallel_jobs: int = 2
@@ -126,14 +137,24 @@ class Config:
     # Viral GTA 6 videos from other channels, sent to Telegram as ideas.
     trends: TrendsConfig = field(default_factory=TrendsConfig)
     vods: VodConfig = field(default_factory=VodConfig)
+    clip_style: ClipStyle = field(default_factory=ClipStyle)
 
+
+FOCUS = ("the single peak moment (the reaction, scream or play): start at most "
+         "2 seconds before it, no setup; keep it 20-35 seconds")
+_OLD_FOCUS = "the strongest reaction or hype moment; start right before it happens"
 
 DEFAULT_ENGINE_OPTIONS = {
     "gaming": True,
     "captions": True,
     "max_clips": 1,
     "min_score": 0,
-    "focus": "the strongest reaction or hype moment; start right before it happens",
+    "focus": FOCUS,
+    # Captions from the first word, 3 words at a time, the spoken word lit up,
+    # in the middle of the frame: the bottom is under TikTok's and Shorts'
+    # buttons and caption bar.
+    "caption_style": {"position": "middle", "words_per_caption": 3,
+                      "uppercase": True, "highlight": True},
 }
 
 
@@ -149,14 +170,20 @@ def load(path: str | Path) -> Config:
     if mode not in MODES:
         raise ValueError(f"publish.mode must be one of {MODES}")
     tg = pub.get("telegram") or {}
+    pre_s, post_s = int(raw.get("pre_s", PRE_S)), int(raw.get("post_s", POST_S))
+    if (pre_s, post_s) == _OLD_PRE_POST:
+        pre_s, post_s = PRE_S, POST_S
+    engine_options = {**DEFAULT_ENGINE_OPTIONS, **(raw.get("engine_options") or {})}
+    if " ".join(str(engine_options.get("focus") or "").split()) == _OLD_FOCUS:
+        engine_options["focus"] = FOCUS
     limits = {p: Limits(**v) for p, v in (pub.get("limits") or {}).items()}
     return Config(
         channels=channels,
         work_dir=Path(raw.get("work_dir") or "/data/live"),
         engine_url=raw.get("engine_url") or "http://127.0.0.1:8765",
         buffer_s=int(raw.get("buffer_s", 600)),
-        pre_s=int(raw.get("pre_s", 25)),
-        post_s=int(raw.get("post_s", 15)),
+        pre_s=pre_s,
+        post_s=post_s,
         live_check_s=int(raw.get("live_check_s", 60)),
         detection=Detection(**(raw.get("detection") or {})),
         max_parallel_jobs=int(raw.get("max_parallel_jobs", 2)),
@@ -171,7 +198,8 @@ def load(path: str | Path) -> Config:
         hashtags=list(pub.get("hashtags") or []),
         credit=str(pub.get("credit") or "Créditos: {channel} ({url})"),
         utc_offset_h=float(raw.get("utc_offset_h", -3.0)),
-        engine_options={**DEFAULT_ENGINE_OPTIONS, **(raw.get("engine_options") or {})},
+        engine_options=engine_options,
         trends=TrendsConfig.from_raw(raw.get("trends")),
         vods=VodConfig.from_raw(raw.get("vods")),
+        clip_style=ClipStyle.from_raw(raw.get("clip_style")),
     )

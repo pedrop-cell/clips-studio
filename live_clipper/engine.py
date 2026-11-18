@@ -117,6 +117,15 @@ class Engine:
         except EngineError:
             return False
 
+    def set_outro(self, on: bool) -> bool:
+        """The app's end card (clips.outro) on or off. A clip that ends on
+        the moment loops back into its own start; a logo card breaks that."""
+        try:
+            self._call("PATCH", "/settings", {"outro": bool(on)}, timeout=10)
+            return True
+        except EngineError:
+            return False
+
     def queue_paused(self) -> bool:
         try:
             return bool((self._call("GET", "/queue", timeout=10) or {}).get("paused"))
