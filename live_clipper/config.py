@@ -7,6 +7,7 @@ from pathlib import Path
 import yaml
 
 from live_clipper.poster import Limits
+from live_clipper.trends import TrendsConfig
 
 PLATFORMS = ("twitch", "kick")
 MODES = ("telegram", "upload_post")
@@ -58,6 +59,8 @@ class Config:
     credit: str = "Créditos: {channel} ({url})"
     utc_offset_h: float = -3.0
     engine_options: dict = field(default_factory=dict)
+    # Viral GTA 6 videos from other channels, sent to Telegram as ideas.
+    trends: TrendsConfig = field(default_factory=TrendsConfig)
 
 
 DEFAULT_ENGINE_OPTIONS = {
@@ -111,4 +114,5 @@ def load(path: str | Path) -> Config:
         credit=str(pub.get("credit") or "Créditos: {channel} ({url})"),
         utc_offset_h=float(raw.get("utc_offset_h", -3.0)),
         engine_options={**DEFAULT_ENGINE_OPTIONS, **(raw.get("engine_options") or {})},
+        trends=TrendsConfig.from_raw(raw.get("trends")),
     )

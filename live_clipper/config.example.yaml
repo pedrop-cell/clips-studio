@@ -62,3 +62,20 @@ publish:
     youtube: public
   hashtags: [GTA6, GTAVI, GTA6Brasil, ViceCity, cortes]
   credit: "Créditos: {channel} ({url})"
+
+# Viral GTA 6 videos other channels already posted (YouTube and Shorts),
+# sent to the same Telegram chat as ideas: link, views, and what to make of it.
+# It never downloads or reposts them: reposting someone else's video gets strikes.
+trends:
+  enabled: true
+  every_min: 60                 # search once an hour
+  top: 6                        # videos per message
+  min_views: 20000              # ignore smaller ones
+  period: semana                # semana (this week) or hoje (today)
+  queries:
+    - GTA 6
+    - GTA 6 curiosidades
+    - GTA 6 easter egg
+    - GTA 6 viral
+    - GTA 6 shorts
+    - GTA VI gameplay
