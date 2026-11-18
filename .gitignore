@@ -293,5 +293,6 @@ live_clipper.yaml
 
 # Live clipper on Windows: secrets, venv and recordings stay local
 clipador.env
+token.txt
 .venv-clipador/
 dados/

@@ -320,6 +320,16 @@ def test_setup_waits_for_the_first_message():
     assert wait_chat_id("t", sleep=lambda s: None, find=lambda t: next(answers)) == "123"
 
 
+def test_setup_cleans_pasted_tokens(tmp_path):
+    from live_clipper.setup import clean_token, token_from_file
+
+    tok = "123456789:" + "A" * 35
+    assert clean_token(f'  TELEGRAM_BOT_TOKEN="{tok}" ') == tok
+    (tmp_path / "token.txt").write_text(tok + "\n", "utf-8")
+    assert token_from_file(tmp_path) == tok
+    assert token_from_file(tmp_path / "nope") == ""
+
+
 def test_setup_rejects_a_bad_token():
     from live_clipper.setup import ask_token
 
