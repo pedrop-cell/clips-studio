@@ -22,6 +22,10 @@ from live_clipper.trends import TrendsWorker
 
 log = logging.getLogger("live_clipper")
 
+# A live recording that writes no new segment for this long is restarted.
+# Long enough for streamlink to sit out a Twitch ad break.
+STALL_S = 180
+
 
 class Clipper:
     """Turns one spike into a published clip. Shared by every channel."""
@@ -161,9 +165,12 @@ class ChannelWorker(threading.Thread):
         det = SpikeDetector(**vars(self.cfg.detection))
         lock = threading.Lock()
 
+        counted = [0]
+
         def on_message(ts: float, text: str) -> None:
             with lock:
                 det.add(ts, text)
+                counted[0] += 1
 
         session_stop = threading.Event()
         chat = reader_for(self.ch.platform, self.ch.name)
@@ -173,6 +180,8 @@ class ChannelWorker(threading.Thread):
         chat_thread.start()
         last_live_check = time.time()
         restart_wait, next_restart, restarting = 2.5, 0.0, False
+        last_report = time.time()
+        last_cover, cover_moved = 0.0, time.time()
         try:
             while not self.stop.is_set():
                 self.stop.wait(1)
@@ -186,6 +195,23 @@ class ChannelWorker(threading.Thread):
                 if int(now) % 30 == 0:
                     # Keep a little extra past the buffer for cuts still waiting.
                     rec.prune(now, self.cfg.buffer_s + self.cfg.pre_s + self.cfg.post_s)
+                if now - last_report >= 300:
+                    with lock:
+                        n, counted[0] = counted[0], 0
+                    log.info("%s: %d chat messages in the last %.0f min (spike needs x%.1f its usual rate "
+                             "and %.1f/s)", self.ch.key, n, (now - last_report) / 60,
+                             self.cfg.detection.ratio, self.cfg.detection.min_rate)
+                    last_report = now
+                cover = rec.covered_until()
+                if cover != last_cover:
+                    last_cover, cover_moved = cover, now
+                elif (not restarting and rec.alive() and now - cover_moved > STALL_S
+                      and now - rec.started_at > STALL_S):
+                    # Alive but writing nothing (a stuck stream): restart it.
+                    log.warning("%s: recording stalled (no new video for %.0fs); restarting", self.ch.key,
+                                now - cover_moved)
+                    rec.stop()
+                    cover_moved = now
                 if not restarting and not rec.alive():
                     if now - last_live_check > 20 and not is_live(self.ch.platform, self.ch.name):
                         log.info("%s went offline", self.ch.key)
