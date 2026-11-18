@@ -138,3 +138,27 @@ If the local model is too slow there, point the engine at OpenRouter
 `recorder.py` (buffer and cuts), `engine.py` (local API client),
 `poster.py` (caps and post text), `notify.py` (Telegram), `runner.py`
 (one worker per channel). Tests: `tests/test_live_clipper.py`.
+
+## Viral videos from other channels (ideas)
+
+Next to the clipper, once an hour, a search looks for GTA 6 videos other
+channels already posted on YouTube (Shorts included) this week, ranks them by
+views per hour since upload, and sends the top new ones to the same Telegram
+chat: title, channel, views, age, link and an idea for a video of your own
+(test the curiosity yourself, react in split screen, a credited compilation).
+Each video is suggested once. No API key: it uses yt-dlp.
+
+It never downloads or reposts anything. Reposting someone else's video gets
+copyright claims and strikes; use it as a topic, comment over it, and credit.
+
+TikTok has no free search without an account, so the message ends with links
+to TikTok's GTA 6 pages to open by hand.
+
+Settings live under `trends:` (queries, `every_min`, `top`, `min_views`,
+`period: semana | hoje`; `enabled: false` turns it off). On Windows,
+`Buscar-Virais-GTA6.bat` runs one search right away.
+
+```bash
+python -m live_clipper.trends --once           # search now, send to Telegram
+python -m live_clipper.trends --once --print   # print instead of sending
+```

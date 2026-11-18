@@ -47,8 +47,11 @@ class Telegram:
             raise NotifyError(f"telegram {method}: {res.get('description')}")
         return res
 
-    def send_text(self, text: str) -> None:
-        body = json.dumps({"chat_id": self.chat_id, "text": text[:4000]}).encode()
+    def send_text(self, text: str, preview: bool = True) -> None:
+        msg = {"chat_id": self.chat_id, "text": text[:4000]}
+        if not preview:  # a list of links would otherwise show a big card for the first one
+            msg["link_preview_options"] = {"is_disabled": True}
+        body = json.dumps(msg).encode()
         self._post("sendMessage", body, "application/json")
 
     def send_clip(self, video: Path, short_caption: str, full_caption: str) -> None:

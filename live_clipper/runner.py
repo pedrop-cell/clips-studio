@@ -18,6 +18,7 @@ from live_clipper.engine import Engine, EngineError, best_clip
 from live_clipper.notify import NotifyError, Telegram
 from live_clipper.poster import Ledger, compose
 from live_clipper.recorder import Recorder, is_live, live_url
+from live_clipper.trends import TrendsWorker
 
 log = logging.getLogger("live_clipper")
 
@@ -176,6 +177,9 @@ def run(cfg: Config) -> None:
     for w in workers:
         w.start()
     log.info("watching %d channels", len(workers))
+    if cfg.trends.enabled and clipper.telegram is not None:
+        TrendsWorker(cfg.trends, clipper.telegram, cfg.work_dir, stop).start()
+        log.info("searching viral GTA 6 videos every %d min", cfg.trends.every_min)
     try:
         while any(w.is_alive() for w in workers):
             time.sleep(5)
