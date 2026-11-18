@@ -182,14 +182,26 @@ class Clipper:
         return clip.get("path")
 
 
+    def _local_copy(self, clip: dict) -> Path:
+        """A file this process can read: the app's path when visible, else a
+        copy fetched from the app (the Store app's own folders are not)."""
+        path = Path(clip.get("path") or "")
+        if clip.get("path") and path.is_file():
+            return path
+        dest = self.cfg.work_dir / "outbox" / f"clip_{clip['id']}.mp4"
+        if not dest.is_file():
+            self.engine.download_clip(int(clip["id"]), dest)
+        return dest
+
     def _deliver(self, ch: Channel, clip: dict, score: float, name: str, url: str) -> str | None:
         post = compose(clip, channel=name, platform=ch.platform, source_url=url,
                        hashtags=self.cfg.hashtags, credit_template=self.cfg.credit,
                        platforms=["tiktok"], privacy={})
         short = f"{post.title}\n{name} · chat x{score:.0f}"
         try:
-            self.telegram.send_clip(Path(clip["path"]), short, post.overrides["tiktok"]["title"])
-        except NotifyError as e:
+            video = self._local_copy(clip)
+            self.telegram.send_clip(video, short, post.overrides["tiktok"]["title"])
+        except (NotifyError, EngineError) as e:
             log.error("%s: telegram delivery of clip %s failed: %s", ch.key, clip["id"], e)
             return clip.get("path")
         log.info("%s: clip %s sent to Telegram", ch.key, clip["id"])

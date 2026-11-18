@@ -213,7 +213,9 @@ class Recorder:
         self.folder.mkdir(parents=True, exist_ok=True)
         sl = streamlink_cmd() if self.platform == "twitch" else None
         if sl:
-            dl_cmd = [*sl, "--loglevel", "warning", "--twitch-disable-ads",
+            # Current streamlink filters Twitch ads on its own (the old
+            # --twitch-disable-ads flag is deprecated).
+            dl_cmd = [*sl, "--loglevel", "warning",
                       "--stdout", live_url(self.platform, self.channel), "1080p60,1080p,best"]
         else:
             dl_cmd = [*ytdlp_cmd(), "--quiet", "--no-part", "-f", self.quality, "-o", "-"]

@@ -103,6 +103,33 @@ class Engine:
         except EngineError:
             return False
 
+    def download_clip(self, clip_id: int, dest, timeout: float = 300):
+        """Save a rendered clip through the app's GET /media/{id}.
+
+        The Microsoft Store app's files live in its own virtualised AppData
+        (a Store app's writes there are redirected), so the path it reports
+        does not exist for other programs; asking the app for the bytes works
+        wherever it keeps them.
+        """
+        from pathlib import Path
+
+        dest = Path(dest)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        req = urllib.request.Request(f"{self.base}/media/{int(clip_id)}")
+        tmp = dest.with_suffix(".part")
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r, open(tmp, "wb") as fh:
+                while chunk := r.read(1 << 20):
+                    fh.write(chunk)
+        except urllib.error.HTTPError as e:
+            tmp.unlink(missing_ok=True)
+            raise EngineError(f"GET /media/{clip_id}: HTTP {e.code}", e.code) from e
+        except (urllib.error.URLError, OSError) as e:
+            tmp.unlink(missing_ok=True)
+            raise EngineError(f"GET /media/{clip_id}: {e}") from e
+        tmp.replace(dest)
+        return dest
+
     def clips(self, video_id: str) -> list[dict]:
         return self._call("GET", f"/videos/{video_id}/clips") or []
 

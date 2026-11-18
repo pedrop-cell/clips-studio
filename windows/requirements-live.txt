@@ -7,4 +7,4 @@ websockets>=14,<17
 yt-dlp[default]>=2026.8.19
 curl_cffi>=0.15.0,<0.16
 # Records Twitch without its ad breaks (yt-dlp's stalled on them).
-streamlink>=7.0
+streamlink>=8.0
