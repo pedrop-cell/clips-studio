@@ -85,6 +85,92 @@ def ytdlp_cmd() -> list[str]:
     return [exe] if exe else [sys.executable, "-m", "yt_dlp"]
 
 
+# YouTube clients to try in turn, for the live's HLS stream. None = yt-dlp's
+# defaults. Which ones hand out a live HLS manifest without a PO token
+# changes with YouTube; the others are fallbacks.
+YT_CLIENTS = (None, "tv,web_safari", "web_embedded", "android_vr", "mweb")
+
+
+class _FileLog:
+    """A yt-dlp logger that keeps warnings and errors in a file."""
+
+    def __init__(self, fh):
+        self.fh = fh
+
+    def debug(self, msg: str) -> None:
+        pass
+
+    def info(self, msg: str) -> None:
+        pass
+
+    def warning(self, msg: str) -> None:
+        self.fh.write(f"{msg}\n")
+
+    def error(self, msg: str) -> None:
+        self.fh.write(f"{msg}\n")
+
+
+def _has(f: dict, kind: str) -> bool:
+    return f.get(kind) != "none"  # None means "not stated", which HLS often is
+
+
+def pick_muxed(formats: list[dict], max_height: int = 1080) -> dict | None:
+    """The best format with both video and audio in one stream, ideally <= max_height."""
+    av = [f for f in formats if f.get("url") and _has(f, "vcodec") and _has(f, "acodec")
+          and (f.get("height") or f.get("vcodec") not in (None, "none"))]
+    if not av:
+        return None
+
+    def rank(f: dict) -> tuple:
+        h = f.get("height") or 0
+        return (h <= max_height, h if h <= max_height else -h, f.get("tbr") or 0)
+
+    return max(av, key=rank)
+
+
+def _describe(formats: list[dict]) -> str:
+    out = []
+    for f in formats[-12:]:
+        av = ("v" if _has(f, "vcodec") else "") + ("a" if _has(f, "acodec") else "")
+        out.append(f"{f.get('format_id')}:{f.get('protocol')}:{f.get('height') or '?'}p:{av or '-'}")
+    return ", ".join(out) or "none"
+
+
+def youtube_stream(channel: str, log_file: Path,
+                   extract: Callable[[str, dict], dict] | None = None) -> tuple[str, dict, str] | None:
+    """(stream url, http headers, description) of a YouTube live, or None.
+
+    Tries yt-dlp's clients in turn and takes the first one that gives a
+    format with video and audio together, which ffmpeg then reads directly.
+    What each client gave is written to `log_file`, for last_error.
+    """
+    url = live_url("youtube", channel)
+    with open(log_file, "w", encoding="utf-8") as fh:
+        def default_extract(u: str, opts: dict) -> dict:
+            import yt_dlp
+
+            with yt_dlp.YoutubeDL({"quiet": True, "skip_download": True, "logger": _FileLog(fh),
+                                   **opts}) as ydl:
+                return ydl.extract_info(u, download=False)
+
+        run = extract or default_extract
+        for client in YT_CLIENTS:
+            opts = {"extractor_args": {"youtube": {"player_client": client.split(",")}}} if client else {}
+            name = client or "default"
+            try:
+                info = run(url, opts) or {}
+            except Exception as e:
+                fh.write(f"[{name}] {str(e)[:200]}\n")
+                continue
+            formats = info.get("formats") or []
+            best = pick_muxed(formats)
+            if best:
+                fh.write(f"[{name}] using {best.get('format_id')} ({best.get('height')}p)\n")
+                return best["url"], dict(best.get("http_headers") or {}), f"{name} {best.get('format_id')}"
+            fh.write(f"[{name}] no video+audio format; got {_describe(formats)}\n")
+    return None
+
+
 class Recorder:
     def __init__(self, platform: str, channel: str, folder: Path, buffer_s: int = 600,
                  quality: str = "best[height<=1080]/best"):
@@ -113,6 +199,9 @@ class Recorder:
         # "UTC0" is read the same by glibc and the Windows C runtime, so segment
         # names are UTC wall-clock on a Windows PC too.
         env = {**os.environ, "TZ": "UTC0"}
+        if self.platform == "youtube":
+            self._start_youtube(ff_cmd, env)
+            return
         # yt-dlp's errors go to a file next to the buffer, so a recorder that
         # keeps dying can say why (last_error).
         self._close_log()
@@ -125,8 +214,26 @@ class Recorder:
             self._dl.stdout.close()  # ffmpeg owns the read end now
         log.info("recording %s/%s into %s", self.platform, self.channel, self.folder)
 
+    def _start_youtube(self, ff_cmd: list[str], env: dict) -> None:
+        """YouTube: yt-dlp finds the live's stream, ffmpeg reads it itself."""
+        self._close_log()
+        self.started_at = time.time()
+        found = youtube_stream(self.channel, self.log_path)
+        if not found:
+            self._ff = None
+            return
+        url, headers, desc = found
+        i = ff_cmd.index("pipe:0")
+        hdr = "".join(f"{k}: {v}\r\n" for k, v in headers.items())
+        ff_cmd[i - 1:i + 1] = [*(["-headers", hdr] if hdr else []), "-i", url]
+        self._ff = subprocess.Popen(ff_cmd, stdin=subprocess.DEVNULL, env=env,
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        log.info("recording %s/%s (%s) into %s", self.platform, self.channel, desc, self.folder)
+
     def alive(self) -> bool:
-        return bool(self._ff and self._ff.poll() is None and self._dl and self._dl.poll() is None)
+        if not (self._ff and self._ff.poll() is None):
+            return False
+        return self.platform == "youtube" or bool(self._dl and self._dl.poll() is None)
 
     def stop(self) -> None:
         for p in (self._dl, self._ff):
@@ -151,7 +258,7 @@ class Recorder:
                 pass
             self._dl_log = None
 
-    def last_error(self, max_chars: int = 600) -> str:
+    def last_error(self, max_chars: int = 1500) -> str:
         """The tail of what yt-dlp (and ffmpeg) printed before dying."""
         parts = []
         try:

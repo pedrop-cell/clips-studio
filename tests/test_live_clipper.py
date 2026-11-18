@@ -455,3 +455,62 @@ def test_recorder_reports_why_yt_dlp_died(tmp_path):
     assert rec.last_error() == ""
     rec.log_path.write_text("ERROR: [youtube] abc: Requested format is not available\n")
     assert "Requested format is not available" in rec.last_error()
+
+
+def test_pick_muxed_prefers_1080_with_audio():
+    from live_clipper.recorder import pick_muxed
+
+    fmts = [
+        {"format_id": "137", "url": "u", "height": 1080, "vcodec": "avc1", "acodec": "none"},
+        {"format_id": "140", "url": "u", "vcodec": "none", "acodec": "mp4a"},
+        {"format_id": "94", "url": "u94", "height": 480, "vcodec": "avc1", "acodec": "mp4a"},
+        {"format_id": "301", "url": "u301", "height": 1080, "vcodec": "avc1", "acodec": "mp4a"},
+        {"format_id": "315", "url": "u315", "height": 2160, "vcodec": "vp9", "acodec": "mp4a"},
+    ]
+    assert pick_muxed(fmts)["format_id"] == "301"
+    assert pick_muxed(fmts[:2]) is None
+
+
+def test_youtube_stream_falls_back_to_the_next_client(tmp_path):
+    from live_clipper.recorder import youtube_stream
+
+    tried = []
+
+    def extract(url, opts):
+        client = opts.get("extractor_args", {}).get("youtube", {}).get("player_client")
+        tried.append(client)
+        if client is None:
+            return {"formats": [{"format_id": "137", "url": "u", "height": 1080, "vcodec": "avc1", "acodec": "none"}]}
+        if client == ["tv", "web_safari"]:
+            raise RuntimeError("Sign in to confirm")
+        return {"formats": [{"format_id": "95", "url": "hls95", "height": 720, "vcodec": "avc1",
+                             "acodec": "mp4a", "http_headers": {"User-Agent": "x"}}]}
+
+    log_file = tmp_path / "yt-dlp.log"
+    assert youtube_stream("@mount", log_file, extract=extract) == ("hls95", {"User-Agent": "x"}, "web_embedded 95")
+    assert tried == [None, ["tv", "web_safari"], ["web_embedded"]]
+    text = log_file.read_text()
+    assert "no video+audio format; got 137:None:1080p:v" in text and "Sign in" in text
+
+
+def test_youtube_recorder_feeds_ffmpeg_the_stream_url(tmp_path, monkeypatch):
+    from live_clipper import recorder as rmod
+
+    monkeypatch.setattr(rmod, "youtube_stream", lambda ch, lf: ("https://hls/x.m3u8", {"User-Agent": "UA"}, "default 301"))
+    seen = {}
+
+    class FakePopen:
+        def __init__(self, cmd, **kw):
+            seen["cmd"] = cmd
+            self.stderr = None
+
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(rmod.subprocess, "Popen", FakePopen)
+    rec = rmod.Recorder("youtube", "@mount", tmp_path)
+    rec.start()
+    cmd = seen["cmd"]
+    assert cmd[cmd.index("-i") + 1] == "https://hls/x.m3u8"
+    assert cmd[cmd.index("-headers") + 1] == "User-Agent: UA\r\n"
+    assert rec.alive()
